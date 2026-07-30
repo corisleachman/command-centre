@@ -7,6 +7,8 @@ import {
   Home, Lightbulb, ListTodo, Menu, Plus, RotateCcw, Sparkles, Target,
   TrendingUp, X
 } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase";
 
 type Category = "cash" | "build" | "health" | "life";
 type Task = {
@@ -66,6 +68,10 @@ export default function Page() {
   const [idea, setIdea] = useState("");
   const [ideas, setIdeas] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [email, setEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [cloudReady, setCloudReady] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("command-centre");
@@ -75,11 +81,61 @@ export default function Page() {
       setIdeas(data.ideas ?? []);
     }
     setReady(true);
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
     if (ready) localStorage.setItem("command-centre", JSON.stringify({ tasks, ideas }));
   }, [tasks, ideas, ready]);
+
+  useEffect(() => {
+    if (!supabase || !user || !ready) {
+      setCloudReady(false);
+      return;
+    }
+    supabase.from("command_centre_state").select("state").eq("user_id", user.id).maybeSingle()
+      .then(({ data, error }) => {
+        if (error) {
+          setAuthMessage("Cloud storage needs the Supabase schema applied.");
+          return;
+        }
+        const state = data?.state as { tasks?: Task[]; ideas?: string[] } | undefined;
+        if (state) {
+          setTasks(state.tasks ?? starterTasks);
+          setIdeas(state.ideas ?? []);
+        }
+        setCloudReady(true);
+      });
+  }, [user, ready]);
+
+  useEffect(() => {
+    if (!supabase || !user || !cloudReady) return;
+    const client = supabase;
+    const timer = window.setTimeout(() => {
+      client.from("command_centre_state").upsert({
+        user_id: user.id,
+        state: { tasks, ideas },
+        updated_at: new Date().toISOString()
+      }).then(({ error }) => setAuthMessage(error ? "Cloud save failed. Your browser copy is still safe." : ""));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [tasks, ideas, user, cloudReady]);
+
+  async function signIn() {
+    if (!supabase || !email.trim()) return;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.href.split("#")[0] }
+    });
+    setAuthMessage(error ? error.message : "Check your email for the secure sign-in link.");
+  }
+
+  async function signOut() {
+    await supabase?.auth.signOut();
+  }
 
   const score = useMemo(() => tasks.filter(t => t.done).reduce((a, t) => a + t.points, 0), [tasks]);
   const today = tasks.filter(t => t.today).slice(0, 3);
@@ -127,7 +183,12 @@ export default function Page() {
             <h1>{view === "Today" ? "Good afternoon, Coris." : view}</h1>
             <p>{view === "Today" ? "Keep it simple. Do the first important thing." : "Your plan, with the detail available when you need it."}</p>
           </div>
-          <button className="primary-btn" onClick={() => setNewTask(true)}><Plus size={18} /> Add task</button>
+          <div className="header-actions">
+            {supabase && (user
+              ? <button className="text-btn" onClick={signOut}>Cloud synced · Sign out</button>
+              : <button className="text-btn" onClick={() => setView("Account")}>Enable cloud sync</button>)}
+            <button className="primary-btn" onClick={() => setNewTask(true)}><Plus size={18} /> Add task</button>
+          </div>
         </header>
 
         {view === "Today" && (
@@ -199,6 +260,7 @@ export default function Page() {
         {view === "Plans" && <section className="panel page-panel">{plans.map(p => <article className="plan-row" key={p.name}><span className={`plan-dot ${p.colour}`} /><div><h3>{p.name}</h3><p>{p.detail}</p></div><span className={`pill ${p.status === "Active" ? "live" : ""}`}>{p.status}</span><ChevronRight /></article>)}</section>}
         {view === "Scorecard" && <section className="metric-grid page-grid">{[["Weekly points", `${score}/50`, "Actions completed"],["Contracted revenue","£0","Target £5,000"],["Qualified pipeline","£0","Target £20,000"],["Paying users","0","Target 5"],["Health sessions",`${tasks.filter(t=>t.category==="health"&&t.done).length}/3`,"This week"],["Household runway","Set value","Review this week"]].map(([a,b,c])=><article className="panel metric-card" key={a}><span className="eyebrow">{a}</span><strong>{b}</strong><p>{c}</p></article>)}</section>}
         {view === "Ideas" && <section className="panel page-panel"><div className="panel-title"><div><span className="eyebrow">NOT NOW</span><h2>Idea car park</h2></div><span className="count">{ideas.length}</span></div><div className="idea-input large"><input value={idea} onChange={e=>setIdea(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addIdea()} placeholder="Capture a thought without changing the plan" /><button onClick={addIdea}><Plus /></button></div>{ideas.length === 0 ? <div className="empty"><Lightbulb/><h3>No ideas parked yet</h3><p>Good. Stay with the plan.</p></div> : ideas.map((item,i)=><div className="parked" key={`${item}-${i}`}><Lightbulb size={17}/><span>{item}</span><button onClick={()=>setIdeas(v=>v.filter((_,n)=>n!==i))}><X size={16}/></button></div>)}</section>}
+        {view === "Account" && <section className="panel page-panel auth-panel"><span className="eyebrow">PRIVATE CLOUD SYNC</span><h2>Sign in to save across devices</h2><p>Enter your email and Supabase will send you a secure sign-in link. There’s no password to remember.</p><div className="idea-input large"><input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&signIn()} placeholder="Your email address" /><button onClick={signIn}><ArrowRight /></button></div>{authMessage && <p>{authMessage}</p>}</section>}
       </section>
 
       {newTask && <div className="modal-backdrop" onClick={() => setNewTask(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="modal-close" onClick={()=>setNewTask(false)}><X/></button><span className="eyebrow">NEW MICRO-TASK</span><h2>Keep it finishable</h2><p>Tasks should fit inside one focused 30 to 60 minute session.</p><NewTaskForm onAdd={task=>{setTasks(v=>[...v,{...task,id:Date.now(),done:false,today:false,week:1}]);setNewTask(false)}} /></div></div>}
