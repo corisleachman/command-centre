@@ -30,10 +30,19 @@ create table if not exists public.metrics (
   unique(user_id, metric_key, recorded_on)
 );
 
+create table if not exists public.command_centre_state (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  state jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 alter table public.tasks enable row level security;
 alter table public.ideas enable row level security;
 alter table public.metrics enable row level security;
+alter table public.command_centre_state enable row level security;
 
 create policy "Users manage own tasks" on public.tasks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "Users manage own ideas" on public.ideas for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "Users manage own metrics" on public.metrics for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "Users manage own command centre state" on public.command_centre_state
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
