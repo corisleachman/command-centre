@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowRight, BriefcaseBusiness, CalendarDays, Check,
   CheckCircle2, ChevronRight, CircleDollarSign, Clock3, HeartPulse,
-  Home, Lightbulb, ListTodo, Menu, Plus, RotateCcw, Sparkles, Target,
-  TrendingUp, X
+  ExternalLink, FileText, Home, Lightbulb, Link2, ListTodo, Menu, Plus,
+  Sparkles, Target, Trash2, TrendingUp, X
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type Category = "cash" | "build" | "health" | "life";
+type TaskLink = { id: number; label: string; url: string };
 type Task = {
   id: number;
   title: string;
@@ -19,6 +20,8 @@ type Task = {
   done: boolean;
   today: boolean;
   week: number;
+  notes?: string;
+  links?: TaskLink[];
 };
 
 const starterTasks: Task[] = [
@@ -46,6 +49,10 @@ const plans = [
   { name: "Pulse Outreach", detail: "Use for your own lead generation only.", status: "Not now", progress: 0, colour: "neutral" }
 ];
 
+function normaliseTask(task: Task): Task {
+  return { ...task, notes: task.notes ?? "", links: task.links ?? [] };
+}
+
 function ProgressRing({ value, size = 70 }: { value: number; size?: number }) {
   const r = 26;
   const c = 2 * Math.PI * r;
@@ -72,12 +79,13 @@ export default function Page() {
   const [email, setEmail] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [cloudReady, setCloudReady] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("command-centre");
     if (saved) {
       const data = JSON.parse(saved);
-      setTasks(data.tasks ?? starterTasks);
+      setTasks((data.tasks ?? starterTasks).map(normaliseTask));
       setIdeas(data.ideas ?? []);
     }
     setReady(true);
@@ -104,7 +112,7 @@ export default function Page() {
         }
         const state = data?.state as { tasks?: Task[]; ideas?: string[] } | undefined;
         if (state) {
-          setTasks(state.tasks ?? starterTasks);
+          setTasks((state.tasks ?? starterTasks).map(normaliseTask));
           setIdeas(state.ideas ?? []);
         }
         setCloudReady(true);
@@ -145,6 +153,10 @@ export default function Page() {
     setTasks(list => list.map(t => t.id === id ? { ...t, done: !t.done } : t));
   }
 
+  function updateTask(id: number, updates: Partial<Task>) {
+    setTasks(list => list.map(task => task.id === id ? { ...task, ...updates } : task));
+  }
+
   function addIdea() {
     if (!idea.trim()) return;
     setIdeas(v => [idea.trim(), ...v]);
@@ -155,6 +167,7 @@ export default function Page() {
     ["Today", Home], ["This week", CalendarDays], ["Objectives", Target],
     ["Plans", ListTodo], ["Scorecard", Activity], ["Ideas", Lightbulb]
   ] as const;
+  const selectedTask = tasks.find(task => task.id === selectedTaskId) ?? null;
 
   return (
     <main className="app-shell">
@@ -200,12 +213,15 @@ export default function Page() {
                   {today.map((task, index) => {
                     const meta = categoryMeta[task.category];
                     const Icon = meta.icon;
-                    return <button key={task.id} className={`task ${task.done ? "done" : ""}`} onClick={() => toggle(task.id)}>
-                      <span className="task-number">{task.done ? <Check size={18} /> : index + 1}</span>
+                    return <div key={task.id} className={`task ${task.done ? "done" : ""}`}>
+                      <button className="task-number" onClick={() => toggle(task.id)} aria-label={task.done ? "Mark incomplete" : "Mark complete"}>{task.done ? <Check size={18} /> : index + 1}</button>
                       <span className={`category-icon ${meta.colour}`}><Icon size={18} /></span>
-                      <span className="task-copy"><strong>{task.title}</strong><small>{meta.label} · {task.points} points · 30–60 min</small></span>
-                      <ChevronRight size={18} />
-                    </button>;
+                      <button className="task-copy" onClick={() => setSelectedTaskId(task.id)}><strong>{task.title}</strong><small>{meta.label} · {task.points} points · 30–60 min</small></button>
+                      <button className="task-detail-button" onClick={() => setSelectedTaskId(task.id)} aria-label="Open action workspace">
+                        {(task.notes || task.links?.length) && <span className="has-detail"><FileText size={13} /> Details</span>}
+                        <ChevronRight size={18} />
+                      </button>
+                    </div>;
                   })}
                 </div>
                 <div className="start-callout"><Sparkles size={20} /><span><small>START HERE</small><strong>{today.find(t => !t.done)?.title ?? "Today's Big Three are complete"}</strong></span><ArrowRight size={20} /></div>
@@ -250,7 +266,7 @@ export default function Page() {
             <div className="weekly-columns">
               {(["cash", "build", "health", "life"] as Category[]).map(cat => {
                 const meta = categoryMeta[cat]; const Icon = meta.icon;
-                return <div className="week-column" key={cat}><h3><span className={`category-icon ${meta.colour}`}><Icon size={17} /></span>{meta.label}</h3>{tasks.filter(t => t.category === cat).map(t => <button className={`mini-task ${t.done ? "done" : ""}`} onClick={() => toggle(t.id)} key={t.id}><span>{t.done ? <Check size={14} /> : ""}</span>{t.title}<small>{t.points} pts</small></button>)}</div>;
+                return <div className="week-column" key={cat}><h3><span className={`category-icon ${meta.colour}`}><Icon size={17} /></span>{meta.label}</h3>{tasks.filter(t => t.category === cat).map(t => <div className={`mini-task ${t.done ? "done" : ""}`} key={t.id}><button onClick={() => toggle(t.id)} aria-label={t.done ? "Mark incomplete" : "Mark complete"}>{t.done ? <Check size={14} /> : ""}</button><button className="mini-task-title" onClick={() => setSelectedTaskId(t.id)}>{t.title}</button><small>{(t.notes || t.links?.length) ? <FileText size={13} /> : `${t.points} pts`}</small></div>)}</div>;
               })}
             </div>
           </section>
@@ -264,6 +280,7 @@ export default function Page() {
       </section>
 
       {newTask && <div className="modal-backdrop" onClick={() => setNewTask(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="modal-close" onClick={()=>setNewTask(false)}><X/></button><span className="eyebrow">NEW MICRO-TASK</span><h2>Keep it finishable</h2><p>Tasks should fit inside one focused 30 to 60 minute session.</p><NewTaskForm onAdd={task=>{setTasks(v=>[...v,{...task,id:Date.now(),done:false,today:false,week:1}]);setNewTask(false)}} /></div></div>}
+      {selectedTask && <TaskWorkspace task={selectedTask} onClose={() => setSelectedTaskId(null)} onUpdate={updates => updateTask(selectedTask.id, updates)} onToggle={() => toggle(selectedTask.id)} />}
     </main>
   );
 }
@@ -271,4 +288,66 @@ export default function Page() {
 function NewTaskForm({onAdd}:{onAdd:(task:Omit<Task,"id"|"done"|"today"|"week">)=>void}) {
   const [title,setTitle]=useState(""); const [category,setCategory]=useState<Category>("cash");
   return <div className="form"><label>Task<input autoFocus value={title} onChange={e=>setTitle(e.target.value)} placeholder="Start with a verb..." /></label><label>Impact<select value={category} onChange={e=>setCategory(e.target.value as Category)}><option value="cash">Cash now</option><option value="build">Build</option><option value="health">Health</option><option value="life">Life</option></select></label><button className="primary-btn" disabled={!title.trim()} onClick={()=>onAdd({title:title.trim(),category,points:category==="cash"?3:2})}>Add to this week</button></div>;
+}
+
+function TaskWorkspace({ task, onClose, onUpdate, onToggle }: {
+  task: Task;
+  onClose: () => void;
+  onUpdate: (updates: Partial<Task>) => void;
+  onToggle: () => void;
+}) {
+  const [linkLabel, setLinkLabel] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
+  const links = task.links ?? [];
+
+  function addLink() {
+    const rawUrl = linkUrl.trim();
+    if (!rawUrl) return;
+    const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    onUpdate({ links: [...links, { id: Date.now(), label: linkLabel.trim() || "Supporting document", url }] });
+    setLinkLabel("");
+    setLinkUrl("");
+  }
+
+  return <div className="modal-backdrop workspace-backdrop" onClick={onClose}>
+    <div className="modal task-workspace" onClick={event => event.stopPropagation()}>
+      <button className="modal-close" onClick={onClose}><X /></button>
+      <span className="eyebrow">ACTION WORKSPACE</span>
+      <input className="workspace-title" value={task.title} onChange={event => onUpdate({ title: event.target.value })} />
+      <div className="workspace-meta">
+        <span className={`category-badge ${categoryMeta[task.category].colour}`}>{categoryMeta[task.category].label}</span>
+        <span>{task.points} points</span>
+        <button className={task.done ? "complete-button complete" : "complete-button"} onClick={onToggle}>
+          <Check size={15} /> {task.done ? "Completed" : "Mark complete"}
+        </button>
+      </div>
+
+      <section className="workspace-section">
+        <div className="workspace-section-title"><FileText size={19} /><div><h3>Working document</h3><p>Draft, plan or compile the work here. It saves automatically.</p></div></div>
+        <textarea
+          value={task.notes ?? ""}
+          onChange={event => onUpdate({ notes: event.target.value })}
+          placeholder={"Start writing here...\n\nUse this space for the detailed work behind the action, including lists, drafts, notes and decisions."}
+        />
+        <small className="save-state">Saved automatically to your Command Centre</small>
+      </section>
+
+      <section className="workspace-section">
+        <div className="workspace-section-title"><Link2 size={19} /><div><h3>Linked resources</h3><p>Add Google Docs, Apple Notes links, decks or any useful webpage.</p></div></div>
+        {links.length > 0 && <div className="resource-list">
+          {links.map(link => <div className="resource" key={link.id}>
+            <Link2 size={16} />
+            <a href={link.url} target="_blank" rel="noreferrer"><strong>{link.label}</strong><small>{link.url}</small></a>
+            <a className="open-resource" href={link.url} target="_blank" rel="noreferrer" aria-label={`Open ${link.label}`}><ExternalLink size={16} /></a>
+            <button onClick={() => onUpdate({ links: links.filter(item => item.id !== link.id) })} aria-label={`Remove ${link.label}`}><Trash2 size={16} /></button>
+          </div>)}
+        </div>}
+        <div className="link-form">
+          <input value={linkLabel} onChange={event => setLinkLabel(event.target.value)} placeholder="Link name, for example Prospect list" />
+          <input value={linkUrl} onChange={event => setLinkUrl(event.target.value)} onKeyDown={event => event.key === "Enter" && addLink()} placeholder="Paste URL" />
+          <button className="primary-btn" disabled={!linkUrl.trim()} onClick={addLink}><Plus size={17} /> Add link</button>
+        </div>
+      </section>
+    </div>
+  </div>;
 }
