@@ -80,6 +80,9 @@ export default function Page() {
   const [authMessage, setAuthMessage] = useState("");
   const [cloudReady, setCloudReady] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [showCompletedBigThree, setShowCompletedBigThree] = useState(false);
+  const [momentumLimit, setMomentumLimit] = useState(3);
+  const [dayFinished, setDayFinished] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("command-centre");
@@ -147,6 +150,15 @@ export default function Page() {
 
   const score = useMemo(() => tasks.filter(t => t.done).reduce((a, t) => a + t.points, 0), [tasks]);
   const today = tasks.filter(t => t.today).slice(0, 3);
+  const bigThreeComplete = today.length > 0 && today.every(t => t.done);
+  const upNext = useMemo(() => {
+    const categoryRank: Record<Category, number> = { cash: 0, build: 1, health: 2, life: 2 };
+    return tasks
+      .map((task, index) => ({ task, index }))
+      .filter(({ task }) => !task.done && !task.today && task.week === 1)
+      .sort((a, b) => categoryRank[a.task.category] - categoryRank[b.task.category] || b.task.points - a.task.points || a.index - b.index)
+      .map(({ task }) => task);
+  }, [tasks]);
   const completed = tasks.filter(t => t.done).length;
 
   function toggle(id: number) {
@@ -208,8 +220,12 @@ export default function Page() {
           <>
             <section className="today-grid">
               <article className="panel big-three">
-                <div className="panel-title"><div><span className="eyebrow">TODAY'S BIG THREE</span><h2>Only these matter now</h2></div><span className="count">{today.filter(t => t.done).length}/3</span></div>
-                <div className="task-list">
+                <div className="panel-title"><div><span className="eyebrow">TODAY'S BIG THREE</span><h2>{bigThreeComplete ? "Your commitments are complete" : "Only these matter now"}</h2></div><span className="count">{today.filter(t => t.done).length}/3</span></div>
+                {bigThreeComplete && <button className="completed-summary" onClick={() => setShowCompletedBigThree(value => !value)}>
+                  <span><CheckCircle2 size={18} /> 3/3 complete</span>
+                  <span>{showCompletedBigThree ? "Hide" : "Review"} <ChevronRight size={16} /></span>
+                </button>}
+                {(!bigThreeComplete || showCompletedBigThree) && <div className="task-list">
                   {today.map((task, index) => {
                     const meta = categoryMeta[task.category];
                     const Icon = meta.icon;
@@ -223,8 +239,33 @@ export default function Page() {
                       </button>
                     </div>;
                   })}
-                </div>
-                <div className="start-callout"><Sparkles size={20} /><span><small>START HERE</small><strong>{today.find(t => !t.done)?.title ?? "Today's Big Three are complete"}</strong></span><ArrowRight size={20} /></div>
+                </div>}
+                {!bigThreeComplete && <div className="start-callout"><Sparkles size={20} /><span><small>START HERE</small><strong>{today.find(t => !t.done)?.title}</strong></span><ArrowRight size={20} /></div>}
+
+                {bigThreeComplete && !dayFinished && <section className="momentum">
+                  <div className="momentum-heading"><div><span className="eyebrow">KEEP THE MOMENTUM GOING</span><h3>Want to keep going?</h3><p>These are optional. Your day is already a success.</p></div><Sparkles size={22} /></div>
+                  {upNext.length > 0 ? <>
+                    <div className="task-list momentum-list">
+                      {upNext.slice(0, momentumLimit).map(task => {
+                        const meta = categoryMeta[task.category];
+                        const Icon = meta.icon;
+                        return <div key={task.id} className="task">
+                          <button className="task-number" onClick={() => toggle(task.id)} aria-label="Mark complete"><Check size={16} /></button>
+                          <span className={`category-icon ${meta.colour}`}><Icon size={18} /></span>
+                          <button className="task-copy" onClick={() => setSelectedTaskId(task.id)}><strong>{task.title}</strong><small>{meta.label} · {task.points} points · Optional extra</small></button>
+                          <button className="task-detail-button" onClick={() => setSelectedTaskId(task.id)} aria-label="Open action workspace"><ChevronRight size={18} /></button>
+                        </div>;
+                      })}
+                    </div>
+                    <div className="momentum-actions">
+                      {momentumLimit < upNext.length && <button className="secondary-btn" onClick={() => setMomentumLimit(limit => limit + 3)}>Show three more</button>}
+                      <button className="secondary-btn" onClick={() => setView("This week")}>View full week</button>
+                      <button className="finish-btn" onClick={() => setDayFinished(true)}>Finish for today</button>
+                    </div>
+                  </> : <div className="all-done"><CheckCircle2 size={24} /><div><strong>Everything for this week is complete</strong><p>You can finish for today with a clear head.</p></div></div>}
+                </section>}
+
+                {bigThreeComplete && dayFinished && <div className="day-finished"><CheckCircle2 size={22} /><div><strong>You're finished for today</strong><p>Your Big Three are complete. Come back tomorrow with a clear starting point.</p></div><button className="text-btn" onClick={() => setDayFinished(false)}>Show optional actions</button></div>}
               </article>
 
               <article className="panel score">
