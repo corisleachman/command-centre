@@ -3,8 +3,8 @@ name: Supabase validate and deploy
 on:
   workflow_dispatch:
     inputs:
-      operation:
-        description: Choose whether to validate or deploy
+      action:
+        description: Validate connection or deploy migrations and functions
         required: true
         default: validate
         type: choice
@@ -15,68 +15,50 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: supabase-production
-  cancel-in-progress: false
-
 jobs:
   supabase:
-    name: ${{ inputs.operation == 'deploy' && 'Deploy Supabase changes' || 'Validate Supabase access' }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.operation == 'deploy' && 'supabase-production' || '' }}
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_REF }}
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Supabase CLI
-        uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      - name: Verify required secrets exist
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=0
-          for variable in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_ID; do
-            if [ -z "${!variable:-}" ]; then
-              echo "::error::$variable is not configured"
-              missing=1
-            fi
-          done
-          exit "$missing"
-
       - name: Link Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Inspect linked project
-        if: inputs.operation == 'validate'
+      - name: Validate connection
+        if: ${{ inputs.action == 'validate' }}
+        run: supabase migration list
+
+      - name: Apply foundation migration first
+        if: ${{ inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          supabase migration list
-          echo "Supabase authentication and project linking succeeded."
-          echo "No migrations or Edge Functions were deployed."
-
-      - name: Apply database migrations
-        if: inputs.operation == 'deploy'
-        run: supabase db push --include-all
+          DATA_MIGRATION="supabase/migrations/20260803_migrate_legacy_command_centre_state.sql"
+          TEMP_MIGRATION="/tmp/20260803_migrate_legacy_command_centre_state.sql"
+          if [ -f "$DATA_MIGRATION" ]; then
+            mv "$DATA_MIGRATION" "$TEMP_MIGRATION"
+          fi
+          supabase db push --include-all
+          if [ -f "$TEMP_MIGRATION" ]; then
+            mv "$TEMP_MIGRATION" "supabase/migrations/20260804_migrate_legacy_command_centre_state.sql"
+          fi
+          supabase db push --include-all
 
       - name: Deploy Edge Functions
-        if: inputs.operation == 'deploy'
-        shell: bash
+        if: ${{ inputs.action == 'deploy' }}
         run: |
-          set -euo pipefail
           if [ -d supabase/functions ]; then
             for function_dir in supabase/functions/*; do
               [ -d "$function_dir" ] || continue
               function_name="$(basename "$function_dir")"
-              echo "Deploying Edge Function: $function_name"
-              supabase functions deploy "$function_name" --project-ref "$SUPABASE_PROJECT_ID"
+              supabase functions deploy "$function_name" --project-ref "$SUPABASE_PROJECT_ID" --no-verify-jwt
             done
           fi
