@@ -1,2 +1,0 @@
--- Placeholder: migration content moved from 20260803_migrate_legacy_command_centre_state.sql
--- This file must run after 20260803_v1_execution_foundation.sql.
