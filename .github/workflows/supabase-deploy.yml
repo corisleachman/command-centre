@@ -41,15 +41,53 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          FOUNDATION_MIGRATION="supabase/migrations/20260803_v1_execution_foundation.sql"
           DATA_MIGRATION="supabase/migrations/20260803_migrate_legacy_command_centre_state.sql"
           TEMP_MIGRATION="/tmp/20260803_migrate_legacy_command_centre_state.sql"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("supabase/migrations/20260803_v1_execution_foundation.sql")
+          sql = path.read_text()
+          old = """  loop
+    execute format(
+      'create policy %I on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',
+      'Users manage own ' || table_name,
+      table_name
+    );
+  exception
+    when duplicate_object then null;
+  end loop;
+"""
+          new = """  loop
+    begin
+      execute format(
+        'create policy %I on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',
+        'Users manage own ' || table_name,
+        table_name
+      );
+    exception
+      when duplicate_object then null;
+    end;
+  end loop;
+"""
+          if old not in sql:
+              raise SystemExit("Expected RLS policy block not found")
+          path.write_text(sql.replace(old, new, 1))
+          PY
+
           if [ -f "$DATA_MIGRATION" ]; then
             mv "$DATA_MIGRATION" "$TEMP_MIGRATION"
           fi
+
           supabase db push --include-all
+
           if [ -f "$TEMP_MIGRATION" ]; then
             mv "$TEMP_MIGRATION" "supabase/migrations/20260804_migrate_legacy_command_centre_state.sql"
           fi
+
           supabase db push --include-all
 
       - name: Deploy Edge Functions
