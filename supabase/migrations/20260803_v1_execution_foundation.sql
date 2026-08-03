@@ -116,8 +116,6 @@ create table if not exists public.milestones (
   unique (initiative_id, legacy_key)
 );
 
--- Replace the existing prototype tasks table only after data verification.
--- This migration extends it where possible, preserving its identity.
 alter table public.tasks add column if not exists initiative_id uuid references public.initiatives(id) on delete set null;
 alter table public.tasks add column if not exists milestone_id uuid references public.milestones(id) on delete set null;
 alter table public.tasks add column if not exists objective_id uuid references public.objectives(id) on delete set null;
@@ -135,9 +133,6 @@ alter table public.tasks add column if not exists is_splittable boolean not null
 alter table public.tasks add column if not exists position integer not null default 0;
 alter table public.tasks add column if not exists legacy_id text;
 alter table public.tasks add column if not exists updated_at timestamptz not null default now();
-
--- Keep legacy columns during compatibility mode: category, points, is_today,
--- is_complete, week_number and completed_at.
 
 create unique index if not exists tasks_user_legacy_id_unique
   on public.tasks(user_id, legacy_id)
@@ -315,7 +310,6 @@ create table if not exists public.migration_status (
   updated_at timestamptz not null default now()
 );
 
--- Helpful indexes
 create index if not exists initiatives_user_status_idx on public.initiatives(user_id, status);
 create index if not exists milestones_initiative_position_idx on public.milestones(initiative_id, position);
 create index if not exists tasks_user_status_due_idx on public.tasks(user_id, status, due_on);
@@ -323,7 +317,6 @@ create index if not exists tasks_initiative_position_idx on public.tasks(initiat
 create index if not exists daily_plans_user_date_idx on public.daily_plans(user_id, plan_date);
 create index if not exists calendar_blocks_user_start_idx on public.calendar_blocks(user_id, starts_at);
 
--- RLS
 alter table public.life_areas enable row level security;
 alter table public.planning_cycles enable row level security;
 alter table public.objectives enable row level security;
@@ -346,8 +339,6 @@ alter table public.planner_runs enable row level security;
 alter table public.ideas_v1 enable row level security;
 alter table public.migration_status enable row level security;
 
--- Single-user ownership policies. Service-role Edge Functions bypass RLS and must
--- still filter by the explicit user being processed.
 do $$
 declare
   table_name text;
@@ -360,18 +351,18 @@ begin
     'migration_status'
   ]
   loop
-    execute format(
-      'create policy %I on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',
-      'Users manage own ' || table_name,
-      table_name
-    );
-  exception
-    when duplicate_object then null;
+    begin
+      execute format(
+        'create policy %I on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)',
+        'Users manage own ' || table_name,
+        table_name
+      );
+    exception
+      when duplicate_object then null;
+    end;
   end loop;
 end $$;
 
--- Compatibility trigger: keep prototype boolean fields aligned while the old UI
--- still reads them. Remove after the relational UI migration is verified.
 create or replace function public.sync_task_legacy_flags()
 returns trigger
 language plpgsql
