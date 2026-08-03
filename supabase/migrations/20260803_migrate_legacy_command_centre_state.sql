@@ -25,7 +25,7 @@ declare
   launch_milestone jsonb;
   launch_action jsonb;
   migrated_task_id uuid;
-  daily_plan_id uuid;
+  v_daily_plan_id uuid;
   song_room_initiative_id uuid;
   workstream_id uuid;
   milestone_id uuid;
@@ -70,11 +70,10 @@ begin
       error_message = null,
       updated_at = now();
 
-    -- Preserve the current daily selection as a dated plan.
     insert into public.daily_plans (user_id, plan_date, status, capacity, created_by)
     values (state_row.user_id, current_date, 'active', 'standard', 'user')
     on conflict (user_id, plan_date) do update set updated_at = now()
-    returning id into daily_plan_id;
+    returning id into v_daily_plan_id;
 
     task_position := 0;
     for source_task in
@@ -95,25 +94,9 @@ begin
       task_week := public.cc_safe_int(source_task->>'week', 1);
 
       insert into public.tasks (
-        user_id,
-        title,
-        category,
-        points,
-        is_today,
-        is_complete,
-        week_number,
-        completed_at,
-        notes,
-        status,
-        priority,
-        estimated_minutes,
-        energy_required,
-        work_type,
-        preferred_time,
-        position,
-        legacy_id,
-        created_at,
-        updated_at
+        user_id, title, category, points, is_today, is_complete, week_number,
+        completed_at, notes, status, priority, estimated_minutes, energy_required,
+        work_type, preferred_time, position, legacy_id, created_at, updated_at
       ) values (
         state_row.user_id,
         coalesce(nullif(trim(source_task->>'title'), ''), 'Untitled task'),
@@ -131,18 +114,16 @@ begin
         end,
         case when task_points >= 5 then 5 when task_points >= 3 then 4 else 3 end,
         case when task_points >= 5 then 90 when task_points >= 3 then 60 else 30 end,
-        case when task_category = 'health' then 'standard'::public.task_energy else 'standard'::public.task_energy end,
+        'standard'::public.task_energy,
         case
           when task_category = 'cash' then 'communication'::public.task_work_type
           when task_category = 'health' then 'health'::public.task_work_type
           when task_category = 'life' then 'life'::public.task_work_type
           else 'deep_work'::public.task_work_type
         end,
-        'any',
-        task_position,
+        'any', task_position,
         coalesce(source_task->>'id', 'legacy-' || task_position::text),
-        coalesce(state_row.updated_at, now()),
-        now()
+        coalesce(state_row.updated_at, now()), now()
       )
       on conflict (user_id, legacy_id) where legacy_id is not null do update set
         title = excluded.title,
@@ -165,7 +146,7 @@ begin
         insert into public.daily_plan_tasks (
           daily_plan_id, task_id, user_id, slot, position, locked
         ) values (
-          daily_plan_id, migrated_task_id, state_row.user_id, 'big_three', task_position, false
+          v_daily_plan_id, migrated_task_id, state_row.user_id, 'big_three', task_position, false
         )
         on conflict (daily_plan_id, task_id) do update set
           slot = excluded.slot,
@@ -180,12 +161,9 @@ begin
         if nullif(trim(source_link->>'url'), '') is not null then
           link_position := link_position + 1;
           insert into public.task_links (user_id, task_id, label, url, position)
-          select
-            state_row.user_id,
-            migrated_task_id,
+          select state_row.user_id, migrated_task_id,
             coalesce(nullif(trim(source_link->>'label'), ''), 'Open'),
-            trim(source_link->>'url'),
-            link_position
+            trim(source_link->>'url'), link_position
           where not exists (
             select 1 from public.task_links existing
             where existing.task_id = migrated_task_id
@@ -195,10 +173,8 @@ begin
       end loop;
     end loop;
 
-    -- Migrate the Idea Car Park.
     for source_idea in
-      select value
-      from jsonb_array_elements(coalesce(source_state->'ideas', '[]'::jsonb))
+      select value from jsonb_array_elements(coalesce(source_state->'ideas', '[]'::jsonb))
     loop
       if nullif(trim(source_idea #>> '{}'), '') is not null then
         insert into public.ideas_v1 (user_id, title, status, created_at, updated_at)
@@ -211,7 +187,6 @@ begin
       end if;
     end loop;
 
-    -- Song Room is migrated as one normal initiative, proving the reusable model.
     launch_state := source_state->'songRoomLaunch';
     if launch_state is not null and jsonb_typeof(launch_state) = 'object' then
       insert into public.initiatives (
@@ -222,13 +197,9 @@ begin
         'The Song Room launch',
         'Prepare, validate and launch The Song Room through a structured execution roadmap.',
         'Launch a properly tested, marketed and measurable product and validate willingness to pay.',
-        'active',
-        4,
+        'active', 4,
         case when nullif(launch_state->>'targetDate', '') is not null then (launch_state->>'targetDate')::date else null end,
-        1,
-        'song-room-launch',
-        coalesce(state_row.updated_at, now()),
-        now()
+        1, 'song-room-launch', coalesce(state_row.updated_at, now()), now()
       )
       on conflict (user_id, legacy_key) do update set
         target_date = excluded.target_date,
@@ -237,15 +208,13 @@ begin
 
       milestone_position := 0;
       for launch_milestone in
-        select value
-        from jsonb_array_elements(coalesce(launch_state->'milestones', '[]'::jsonb))
+        select value from jsonb_array_elements(coalesce(launch_state->'milestones', '[]'::jsonb))
       loop
         milestone_position := milestone_position + 1;
 
         insert into public.workstreams (user_id, initiative_id, title, position)
         values (
-          state_row.user_id,
-          song_room_initiative_id,
+          state_row.user_id, song_room_initiative_id,
           coalesce(nullif(trim(launch_milestone->>'workstream'), ''), 'General'),
           milestone_position
         )
@@ -277,11 +246,9 @@ begin
             ) then 'in_progress'
             else 'not_started'
           end,
-          4,
-          milestone_position,
+          4, milestone_position,
           coalesce(launch_milestone->>'id', 'song-room-milestone-' || milestone_position::text),
-          coalesce(state_row.updated_at, now()),
-          now()
+          coalesce(state_row.updated_at, now()), now()
         )
         on conflict (initiative_id, legacy_key) do update set
           title = excluded.title,
@@ -294,8 +261,7 @@ begin
 
         action_position := 0;
         for launch_action in
-          select value
-          from jsonb_array_elements(coalesce(launch_milestone->'actions', '[]'::jsonb))
+          select value from jsonb_array_elements(coalesce(launch_milestone->'actions', '[]'::jsonb))
         loop
           action_position := action_position + 1;
           insert into public.tasks (
@@ -304,9 +270,7 @@ begin
             priority, estimated_minutes, energy_required, work_type, due_on,
             preferred_time, position, legacy_id, created_at, updated_at
           ) values (
-            state_row.user_id,
-            song_room_initiative_id,
-            milestone_id,
+            state_row.user_id, song_room_initiative_id, milestone_id,
             coalesce(nullif(trim(launch_action->>'title'), ''), 'Untitled launch action'),
             'build',
             case launch_action->>'priority' when 'critical' then 5 when 'important' then 3 else 1 end,
@@ -331,11 +295,9 @@ begin
               else 'deep_work'::public.task_work_type
             end,
             case when nullif(launch_action->>'dueDate', '') is not null then (launch_action->>'dueDate')::date else null end,
-            'any',
-            action_position,
+            'any', action_position,
             'song-room-action:' || coalesce(launch_action->>'id', milestone_position::text || ':' || action_position::text),
-            coalesce(state_row.updated_at, now()),
-            now()
+            coalesce(state_row.updated_at, now()), now()
           )
           on conflict (user_id, legacy_id) where legacy_id is not null do update set
             initiative_id = excluded.initiative_id,
@@ -366,7 +328,6 @@ begin
       end loop;
     end if;
 
-    -- Verify that every legacy task and idea arrived before marking the user complete.
     source_task_count := jsonb_array_length(coalesce(source_state->'tasks', '[]'::jsonb));
     select count(*) into migrated_task_count
     from public.tasks
@@ -395,10 +356,7 @@ begin
        and migrated_idea_count >= source_idea_count
        and migrated_launch_action_count >= source_launch_action_count then
       update public.migration_status set
-        status = 'verified',
-        verified_at = now(),
-        error_message = null,
-        updated_at = now()
+        status = 'verified', verified_at = now(), error_message = null, updated_at = now()
       where user_id = state_row.user_id;
     else
       update public.migration_status set
@@ -417,7 +375,6 @@ begin
 end;
 $$;
 
--- Read-only verification helper for the dashboard or SQL editor.
 create or replace view public.command_centre_migration_verification as
 select
   ms.user_id,
