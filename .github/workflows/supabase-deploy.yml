@@ -1,6 +1,13 @@
 name: Supabase validate and deploy
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/functions/**"
+      - ".github/workflows/supabase-deploy.yml"
   workflow_dispatch:
     inputs:
       action:
@@ -14,6 +21,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: supabase-production
+  cancel-in-progress: false
 
 jobs:
   supabase:
@@ -33,18 +44,18 @@ jobs:
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       - name: Validate connection
-        if: ${{ inputs.action == 'validate' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'validate' }}
         run: supabase migration list
 
       - name: Apply pending migrations
-        if: ${{ inputs.action == 'deploy' }}
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
           supabase db push --include-all
 
       - name: Deploy Edge Functions
-        if: ${{ inputs.action == 'deploy' }}
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
