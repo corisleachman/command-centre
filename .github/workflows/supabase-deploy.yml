@@ -36,24 +36,11 @@ jobs:
         if: ${{ inputs.action == 'validate' }}
         run: supabase migration list
 
-      - name: Apply foundation migration first
+      - name: Apply pending migrations
         if: ${{ inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          DATA_MIGRATION="supabase/migrations/20260803_migrate_legacy_command_centre_state.sql"
-          TEMP_MIGRATION="/tmp/20260803_migrate_legacy_command_centre_state.sql"
-
-          if [ -f "$DATA_MIGRATION" ]; then
-            mv "$DATA_MIGRATION" "$TEMP_MIGRATION"
-          fi
-
-          supabase db push --include-all
-
-          if [ -f "$TEMP_MIGRATION" ]; then
-            mv "$TEMP_MIGRATION" "supabase/migrations/20260804_migrate_legacy_command_centre_state.sql"
-          fi
-
           supabase db push --include-all
 
       - name: Deploy Edge Functions
