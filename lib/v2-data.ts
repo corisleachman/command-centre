@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+export type V2TaskLink = { id: string; label: string; url: string };
+
 export type V2Task = {
   id: string;
   title: string;
@@ -12,6 +14,7 @@ export type V2Task = {
   initiativeId: string | null;
   milestoneId: string | null;
   position: number;
+  links: V2TaskLink[];
 };
 
 export type V2Milestone = {
@@ -65,7 +68,7 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function mapTask(row: Row): V2Task {
+function mapTask(row: Row, links: V2TaskLink[]): V2Task {
   return {
     id: asString(row.id),
     title: asString(row.title, "Untitled task"),
@@ -77,22 +80,25 @@ function mapTask(row: Row): V2Task {
     notes: asNullableString(row.notes),
     initiativeId: asNullableString(row.initiative_id),
     milestoneId: asNullableString(row.milestone_id),
-    position: asNumber(row.position, 0)
+    position: asNumber(row.position, 0),
+    links
   };
 }
 
 export async function loadV2Workspace(client: SupabaseClient, userId: string): Promise<V2Workspace> {
-  const [initiativesResult, workstreamsResult, milestonesResult, tasksResult] = await Promise.all([
+  const [initiativesResult, workstreamsResult, milestonesResult, tasksResult, linksResult] = await Promise.all([
     client.from("initiatives").select("id,title,purpose,desired_outcome,status,priority,target_date,position").eq("user_id", userId).order("position"),
     client.from("workstreams").select("id,title,initiative_id,position").eq("user_id", userId).order("position"),
     client.from("milestones").select("id,title,status,initiative_id,workstream_id,position").eq("user_id", userId).order("position"),
-    client.from("tasks").select("id,title,status,category,priority,estimated_minutes,due_on,notes,initiative_id,milestone_id,position,is_today,is_complete").eq("user_id", userId).order("position")
+    client.from("tasks").select("id,title,status,category,priority,estimated_minutes,due_on,notes,initiative_id,milestone_id,position,is_today,is_complete").eq("user_id", userId).order("position"),
+    client.from("task_links").select("id,task_id,label,url,position").eq("user_id", userId).order("position")
   ]);
 
-  const firstError = initiativesResult.error ?? workstreamsResult.error ?? milestonesResult.error ?? tasksResult.error;
+  const firstError = initiativesResult.error ?? workstreamsResult.error ?? milestonesResult.error ?? tasksResult.error ?? linksResult.error;
   if (firstError) throw firstError;
 
-  const tasks = (tasksResult.data ?? []).map(row => mapTask(row as Row));
+  const linkRows = (linksResult.data ?? []) as Array<{ id: string; task_id: string; label: string; url: string }>;
+  const tasks = (tasksResult.data ?? []).map(row => mapTask(row as Row, linkRows.filter(link => link.task_id === row.id).map(link => ({ id: link.id, label: link.label, url: link.url }))));
   const taskRows = (tasksResult.data ?? []) as Row[];
   const todayIds = new Set(taskRows.filter(row => row.is_today === true && row.is_complete !== true).map(row => asString(row.id)));
 
@@ -132,4 +138,16 @@ export async function loadV2Workspace(client: SupabaseClient, userId: string): P
     todayTasks: tasks.filter(task => todayIds.has(task.id)),
     allTasks: tasks
   };
+}
+
+export async function setV2TaskComplete(client: SupabaseClient, userId: string, task: V2Task, complete: boolean) {
+  const status = complete ? "complete" : "ready";
+  const { error } = await client.from("tasks").update({
+    status,
+    is_complete: complete,
+    is_today: complete ? false : task.status === "today",
+    completed_at: complete ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString()
+  }).eq("id", task.id).eq("user_id", userId);
+  if (error) throw error;
 }
