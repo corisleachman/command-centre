@@ -5,15 +5,10 @@ import Link from "next/link";
 import { ArrowLeft, Check, Layers3, Plus, Save, Target, Trash2 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../../lib/supabase";
-import {
-  createV2Initiative, createV2Milestone, createV2Workstream, deleteV2Milestone,
-  deleteV2Workstream, loadV2Workspace, updateV2Initiative, updateV2Milestone,
-  updateV2Workstream, type V2Initiative, type V2Workspace
-} from "../../../lib/v2-data";
+import { createV2Initiative, createV2Milestone, createV2Workstream, deleteV2Milestone, deleteV2Workstream, loadV2Workspace, updateV2Initiative, updateV2Milestone, updateV2Workstream, type V2Initiative, type V2Workspace } from "../../../lib/v2-data";
 import styles from "./initiatives.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
-
 type Draft = { title: string; purpose: string; desiredOutcome: string; status: string; priority: number; targetDate: string };
 
 export default function InitiativesPage() {
@@ -26,7 +21,7 @@ export default function InitiativesPage() {
 
   useEffect(() => {
     if (!supabase) { setError("Supabase is not configured."); setLoading(false); return; }
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); if (!data.session?.user) setLoading(false); });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -43,26 +38,14 @@ export default function InitiativesPage() {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { void reload(); }, [user]);
+  useEffect(() => { if (user) void reload(); }, [user]);
   const selected = useMemo(() => workspace.initiatives.find(item => item.id === selectedId) ?? null, [workspace, selectedId]);
 
-  if (!user && !loading) return <main className={styles.auth}><div><h1>Sign in first</h1><Link href="/v2">Back to V2</Link></div></main>;
+  if (!user) return <main className={styles.auth}><div><h1>{loading ? "Checking your session..." : "Sign in first"}</h1>{!loading && <Link href="/v2">Back to V2</Link>}</div></main>;
 
   return <main className={styles.page}>
-    <aside className={styles.sidebar}>
-      <Link href="/v2" className={styles.back}><ArrowLeft size={17} /> Back to V2</Link>
-      <div className={styles.brand}><Layers3 /><div><span>INITIATIVE ENGINE</span><strong>Command Centre V2</strong></div></div>
-      <button className={styles.primary} onClick={() => setShowCreate(true)}><Plus size={17} /> New initiative</button>
-      <div className={styles.list}>{workspace.initiatives.map(item => <button key={item.id} className={item.id === selectedId ? styles.active : ""} onClick={() => setSelectedId(item.id)}><strong>{item.title}</strong><span>{item.status} · priority {item.priority}</span></button>)}</div>
-    </aside>
-
-    <section className={styles.content}>
-      {loading && <div className={styles.state}>Loading initiative workspace...</div>}
-      {error && <div className={styles.error}>{error}</div>}
-      {!loading && !error && selected && <Editor initiative={selected} userId={user.id} onChanged={() => reload(selected.id)} />}
-      {!loading && !error && !selected && <div className={styles.empty}><Layers3 size={34} /><h1>Create your first initiative</h1><p>Use initiatives for outcomes that need multiple milestones and actions.</p><button className={styles.primary} onClick={() => setShowCreate(true)}><Plus size={17} /> New initiative</button></div>}
-    </section>
-
+    <aside className={styles.sidebar}><Link href="/v2" className={styles.back}><ArrowLeft size={17} /> Back to V2</Link><div className={styles.brand}><Layers3 /><div><span>INITIATIVE ENGINE</span><strong>Command Centre V2</strong></div></div><button className={styles.primary} onClick={() => setShowCreate(true)}><Plus size={17} /> New initiative</button><div className={styles.list}>{workspace.initiatives.map(item => <button key={item.id} className={item.id === selectedId ? styles.active : ""} onClick={() => setSelectedId(item.id)}><strong>{item.title}</strong><span>{item.status} · priority {item.priority}</span></button>)}</div></aside>
+    <section className={styles.content}>{loading && <div className={styles.state}>Loading initiative workspace...</div>}{error && <div className={styles.error}>{error}</div>}{!loading && !error && selected && <Editor initiative={selected} userId={user.id} onChanged={() => reload(selected.id)} />}{!loading && !error && !selected && <div className={styles.empty}><Layers3 size={34} /><h1>Create your first initiative</h1><p>Use initiatives for outcomes that need multiple milestones and actions.</p><button className={styles.primary} onClick={() => setShowCreate(true)}><Plus size={17} /> New initiative</button></div>}</section>
     {showCreate && <CreateModal userId={user.id} onClose={() => setShowCreate(false)} onCreated={async id => { setShowCreate(false); await reload(id); }} />}
   </main>;
 }
@@ -71,15 +54,9 @@ function Editor({ initiative, userId, onChanged }: { initiative: V2Initiative; u
   const [draft, setDraft] = useState<Draft>({ title: initiative.title, purpose: initiative.purpose ?? "", desiredOutcome: initiative.desiredOutcome ?? "", status: initiative.status, priority: initiative.priority, targetDate: initiative.targetDate ?? "" });
   const [busy, setBusy] = useState(false);
   useEffect(() => setDraft({ title: initiative.title, purpose: initiative.purpose ?? "", desiredOutcome: initiative.desiredOutcome ?? "", status: initiative.status, priority: initiative.priority, targetDate: initiative.targetDate ?? "" }), [initiative]);
-
   async function save() { if (!supabase || !draft.title.trim()) return; setBusy(true); try { await updateV2Initiative(supabase, userId, initiative.id, { ...draft, title: draft.title.trim() }); await onChanged(); } finally { setBusy(false); } }
   async function addStream() { if (!supabase) return; const title = window.prompt("Workstream name"); if (!title?.trim()) return; await createV2Workstream(supabase, userId, initiative.id, title.trim()); await onChanged(); }
-
-  return <div className={styles.editor}>
-    <header className={styles.header}><div><span>INITIATIVE WORKSPACE</span><h1>{initiative.title}</h1><p>Define the outcome, structure the work, then attach actions.</p></div><button className={styles.primary} onClick={save} disabled={busy}><Save size={17} /> {busy ? "Saving..." : "Save"}</button></header>
-    <section className={styles.card}><div className={styles.grid}><label>Title<input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label><label>Status<select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })}><option value="active">Active</option><option value="paused">Paused</option><option value="complete">Complete</option><option value="archived">Archived</option></select></label><label>Priority<select value={draft.priority} onChange={e => setDraft({ ...draft, priority: Number(e.target.value) })}>{[5,4,3,2,1].map(v => <option key={v}>{v}</option>)}</select></label><label>Target date<input type="date" value={draft.targetDate} onChange={e => setDraft({ ...draft, targetDate: e.target.value })} /></label></div><label>Purpose<textarea rows={3} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })} /></label><label>Desired outcome<textarea rows={3} value={draft.desiredOutcome} onChange={e => setDraft({ ...draft, desiredOutcome: e.target.value })} /></label></section>
-    <section><div className={styles.sectionHead}><div><span>DELIVERY STRUCTURE</span><h2>Workstreams and milestones</h2></div><button onClick={addStream}><Plus size={16} /> Add workstream</button></div>{initiative.workstreams.map(stream => <Workstream key={stream.id} initiativeId={initiative.id} stream={stream} userId={userId} onChanged={onChanged} />)}{initiative.workstreams.length === 0 && <div className={styles.emptyInline}>No workstreams yet.</div>}</section>
-  </div>;
+  return <div className={styles.editor}><header className={styles.header}><div><span>INITIATIVE WORKSPACE</span><h1>{initiative.title}</h1><p>Define the outcome, structure the work, then attach actions.</p></div><button className={styles.primary} onClick={save} disabled={busy}><Save size={17} /> {busy ? "Saving..." : "Save"}</button></header><section className={styles.card}><div className={styles.grid}><label>Title<input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label><label>Status<select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })}><option value="active">Active</option><option value="paused">Paused</option><option value="complete">Complete</option><option value="archived">Archived</option></select></label><label>Priority<select value={draft.priority} onChange={e => setDraft({ ...draft, priority: Number(e.target.value) })}>{[5,4,3,2,1].map(v => <option key={v}>{v}</option>)}</select></label><label>Target date<input type="date" value={draft.targetDate} onChange={e => setDraft({ ...draft, targetDate: e.target.value })} /></label></div><label>Purpose<textarea rows={3} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })} /></label><label>Desired outcome<textarea rows={3} value={draft.desiredOutcome} onChange={e => setDraft({ ...draft, desiredOutcome: e.target.value })} /></label></section><section><div className={styles.sectionHead}><div><span>DELIVERY STRUCTURE</span><h2>Workstreams and milestones</h2></div><button onClick={addStream}><Plus size={16} /> Add workstream</button></div>{initiative.workstreams.map(stream => <Workstream key={stream.id} initiativeId={initiative.id} stream={stream} userId={userId} onChanged={onChanged} />)}{initiative.workstreams.length === 0 && <div className={styles.emptyInline}>No workstreams yet.</div>}</section></div>;
 }
 
 function Workstream({ initiativeId, stream, userId, onChanged }: { initiativeId: string; stream: V2Initiative["workstreams"][number]; userId: string; onChanged: () => Promise<void> }) {
@@ -91,8 +68,7 @@ function Workstream({ initiativeId, stream, userId, onChanged }: { initiativeId:
 }
 
 function Milestone({ milestone, userId, onChanged }: { milestone: V2Initiative["workstreams"][number]["milestones"][number]; userId: string; onChanged: () => Promise<void> }) {
-  const [title, setTitle] = useState(milestone.title);
-  const [status, setStatus] = useState(milestone.status);
+  const [title, setTitle] = useState(milestone.title); const [status, setStatus] = useState(milestone.status);
   async function save() { if (!supabase || !title.trim()) return; await updateV2Milestone(supabase, userId, milestone.id, { title: title.trim(), status }); await onChanged(); }
   async function remove() { if (!supabase || !window.confirm(`Delete milestone “${milestone.title}”?`)) return; await deleteV2Milestone(supabase, userId, milestone.id); await onChanged(); }
   return <div className={styles.milestone}><Target size={17} /><input value={title} onChange={e => setTitle(e.target.value)} /><select value={status} onChange={e => setStatus(e.target.value)}><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="complete">Complete</option></select><span>{milestone.tasks.length} tasks</span><button onClick={save}><Check size={16} /></button><button className={styles.danger} onClick={remove}><Trash2 size={16} /></button></div>;
