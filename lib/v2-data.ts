@@ -54,6 +54,17 @@ export type V2Workspace = {
   allTasks: V2Task[];
 };
 
+export type V2TaskDraft = {
+  title: string;
+  category: string;
+  priority: number;
+  estimatedMinutes: number;
+  dueOn?: string | null;
+  notes?: string | null;
+  initiativeId?: string | null;
+  milestoneId?: string | null;
+};
+
 type Row = Record<string, unknown>;
 
 function asString(value: unknown, fallback = ""): string {
@@ -141,13 +152,60 @@ export async function loadV2Workspace(client: SupabaseClient, userId: string): P
 }
 
 export async function setV2TaskComplete(client: SupabaseClient, userId: string, task: V2Task, complete: boolean) {
-  const status = complete ? "complete" : "ready";
   const { error } = await client.from("tasks").update({
-    status,
+    status: complete ? "complete" : "ready",
     is_complete: complete,
     is_today: complete ? false : task.status === "today",
     completed_at: complete ? new Date().toISOString() : null,
     updated_at: new Date().toISOString()
   }).eq("id", task.id).eq("user_id", userId);
+  if (error) throw error;
+}
+
+export async function updateV2Task(client: SupabaseClient, userId: string, taskId: string, updates: Partial<V2TaskDraft>) {
+  const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (updates.title !== undefined) payload.title = updates.title;
+  if (updates.category !== undefined) payload.category = updates.category;
+  if (updates.priority !== undefined) payload.priority = updates.priority;
+  if (updates.estimatedMinutes !== undefined) payload.estimated_minutes = updates.estimatedMinutes;
+  if (updates.dueOn !== undefined) payload.due_on = updates.dueOn || null;
+  if (updates.notes !== undefined) payload.notes = updates.notes || null;
+  if (updates.initiativeId !== undefined) payload.initiative_id = updates.initiativeId || null;
+  if (updates.milestoneId !== undefined) payload.milestone_id = updates.milestoneId || null;
+  const { error } = await client.from("tasks").update(payload).eq("id", taskId).eq("user_id", userId);
+  if (error) throw error;
+}
+
+export async function createV2Task(client: SupabaseClient, userId: string, draft: V2TaskDraft) {
+  const { error } = await client.from("tasks").insert({
+    user_id: userId,
+    title: draft.title,
+    category: draft.category,
+    points: Math.max(1, draft.priority),
+    status: "ready",
+    priority: draft.priority,
+    estimated_minutes: draft.estimatedMinutes,
+    due_on: draft.dueOn || null,
+    notes: draft.notes || null,
+    initiative_id: draft.initiativeId || null,
+    milestone_id: draft.milestoneId || null,
+    is_today: false,
+    is_complete: false,
+    week_number: 1,
+    energy_required: "standard",
+    work_type: draft.category === "cash" ? "communication" : draft.category === "health" ? "health" : draft.category === "life" ? "life" : "deep_work",
+    preferred_time: "any",
+    position: Date.now()
+  });
+  if (error) throw error;
+}
+
+export async function addV2TaskLink(client: SupabaseClient, userId: string, taskId: string, label: string, url: string) {
+  const { error } = await client.from("task_links").insert({ user_id: userId, task_id: taskId, label, url, position: Date.now() });
+  if (error) throw error;
+}
+
+export async function deleteV2TaskLink(client: SupabaseClient, userId: string, linkId: string) {
+  const { error } = await client.from("task_links").delete().eq("id", linkId).eq("user_id", userId);
   if (error) throw error;
 }
