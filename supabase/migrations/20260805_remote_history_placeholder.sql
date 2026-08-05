@@ -1,3 +1,0 @@
--- Placeholder for migration version 20260805 already recorded on the remote Supabase project.
--- This file intentionally contains no SQL. It restores local/remote migration history alignment
--- so later additive migrations can be validated and applied safely.
