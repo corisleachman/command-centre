@@ -27,9 +27,17 @@ export const defaultRevenueRoutine = {
   is_active: true,
 };
 
+function routineTableUnavailable(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return error.code === "42P01" || error.code === "PGRST205" || /calendar_routines/i.test(error.message ?? "");
+}
+
 export async function loadCalendarRoutines(client: SupabaseClient, userId: string): Promise<CalendarRoutine[]> {
   const { data, error } = await client.from("calendar_routines").select("*").eq("user_id", userId).order("priority").order("created_at");
-  if (error) throw error;
+  if (error) {
+    if (routineTableUnavailable(error)) return [];
+    throw error;
+  }
   return (data ?? []).map(row => ({
     id: row.id,
     title: row.title,
@@ -47,9 +55,15 @@ export async function loadCalendarRoutines(client: SupabaseClient, userId: strin
 
 export async function ensureDefaultRevenueRoutine(client: SupabaseClient, userId: string) {
   const { data, error } = await client.from("calendar_routines").select("id").eq("user_id", userId).ilike("title", "Revenue generation").maybeSingle();
-  if (error) throw error;
+  if (error) {
+    if (routineTableUnavailable(error)) return null;
+    throw error;
+  }
   if (data) return data.id as string;
   const { data: inserted, error: insertError } = await client.from("calendar_routines").insert({ user_id: userId, ...defaultRevenueRoutine }).select("id").single();
-  if (insertError) throw insertError;
+  if (insertError) {
+    if (routineTableUnavailable(insertError)) return null;
+    throw insertError;
+  }
   return inserted.id as string;
 }
