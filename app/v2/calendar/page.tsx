@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, CheckCircle2, Clock3, Link2, Plus, RefreshCcw, ShieldCheck } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock3, Link2, Plus, RefreshCcw, ShieldCheck, Sparkles } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../../lib/supabase";
-import { loadV2Workspace, type V2Task, type V2Workspace } from "../../../lib/v2-data";
+import { loadV2Workspace, type V2Workspace } from "../../../lib/v2-data";
 import { callCalendar, combineLocalDateTime, loadCalendarStatus, localDateInput, type CalendarConnectionStatus, type GoogleCalendarEvent, type GoogleCalendarOption } from "../../../lib/v2-calendar";
+import { findAvailableWindows, proposePriorityBlocks, type ProposedCalendarBlock } from "../../../lib/v2-calendar-planner";
 import styles from "./calendar.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
@@ -21,6 +22,9 @@ export default function CalendarPage() {
   const [startTime, setStartTime] = useState("09:30");
   const [duration, setDuration] = useState(60);
   const [taskId, setTaskId] = useState("");
+  const [workdayStart, setWorkdayStart] = useState("09:00");
+  const [workdayEnd, setWorkdayEnd] = useState("17:30");
+  const [proposals, setProposals] = useState<ProposedCalendarBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -95,7 +99,7 @@ export default function CalendarPage() {
 
   async function loadDay(calendarId = status?.selected_calendar_id) {
     if (!supabase || !calendarId) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setProposals([]);
     try {
       const from = new Date(`${date}T00:00:00`).toISOString();
       const to = new Date(`${date}T23:59:59`).toISOString();
@@ -111,53 +115,53 @@ export default function CalendarPage() {
     try {
       const startsAt = combineLocalDateTime(date, startTime);
       const endsAt = new Date(new Date(startsAt).getTime() + duration * 60_000).toISOString();
-      await callCalendar(supabase, "createBlock", {
-        taskId: selectedTask.id,
-        title: selectedTask.title,
-        startsAt,
-        endsAt,
-        calendarId: status.selected_calendar_id,
-        timeZone: "Europe/London",
-      });
+      await callCalendar(supabase, "createBlock", { taskId: selectedTask.id, title: selectedTask.title, startsAt, endsAt, calendarId: status.selected_calendar_id, timeZone: "Europe/London" });
       setMessage(`Blocked ${duration} minutes for “${selectedTask.title}”.`);
       await loadDay();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to create the time block."); }
     finally { setBusy(false); }
   }
 
+  function buildPlan() {
+    setError(""); setMessage("");
+    const windows = findAvailableWindows(date, events, workdayStart, workdayEnd);
+    const candidates = workspace.todayTasks.length ? workspace.todayTasks : activeTasks;
+    const next = proposePriorityBlocks(candidates, windows, 3);
+    setProposals(next);
+    if (!next.length) setError("No suitable free windows were found for the selected workday.");
+  }
+
+  async function applyPlan() {
+    if (!supabase || !status?.selected_calendar_id || !proposals.length) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      for (const block of proposals) {
+        await callCalendar(supabase, "createBlock", { taskId: block.taskId, title: block.title, startsAt: block.startsAt, endsAt: block.endsAt, calendarId: status.selected_calendar_id, timeZone: "Europe/London" });
+      }
+      setMessage(`Added ${proposals.length} protected focus block${proposals.length === 1 ? "" : "s"}.`);
+      setProposals([]);
+      await loadDay();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to apply the proposed plan."); }
+    finally { setBusy(false); }
+  }
+
   if (!user && !loading) return <main className={styles.state}><div><h1>Sign in first</h1><Link href="/v2">Back to V2</Link></div></main>;
 
   return <main className={styles.page}>
-    <header className={styles.hero}>
-      <div><span>GOOGLE CALENDAR</span><h1>Turn priorities into protected time</h1><p>Read your existing commitments, choose the calendar Command Centre manages, and create focus blocks without touching unrelated meetings.</p></div>
-      <div className={styles.trust}><ShieldCheck size={19} /><span>Only Command Centre-created blocks can be moved or deleted.</span></div>
-    </header>
-
+    <header className={styles.hero}><div><span>GOOGLE CALENDAR</span><h1>Turn priorities into protected time</h1><p>Read your existing commitments, choose the calendar Command Centre manages, and create focus blocks without touching unrelated meetings.</p></div><div className={styles.trust}><ShieldCheck size={19} /><span>Only Command Centre-created blocks can be moved or deleted.</span></div></header>
     {error && <div className={styles.error}>{error}</div>}
     {message && <div className={styles.success}><CheckCircle2 size={17} />{message}</div>}
 
     {loading ? <section className={styles.loading}>Loading Calendar connection…</section> : !status || status.status !== "connected" ?
       <section className={styles.connectCard}><CalendarDays size={32} /><h2>Connect Google Calendar</h2><p>This opens Google consent and requests offline Calendar access so Command Centre can keep your time blocks in sync.</p><button disabled={busy} onClick={connectGoogle}><Link2 size={17} /> Connect Google Calendar</button></section>
       : <div className={styles.grid}>
-        <section className={styles.panel}>
-          <div className={styles.panelHeader}><div><CalendarDays size={19} /><h2>Connection</h2></div><span className={styles.connected}>Connected</span></div>
-          <dl><div><dt>Google account</dt><dd>{status.google_account_email || "Connected account"}</dd></div><div><dt>Managed calendar</dt><dd>{status.selected_calendar_name || "Not selected"}</dd></div></dl>
-          <button className={styles.secondary} disabled={busy} onClick={loadCalendars}><RefreshCcw size={16} /> {calendars.length ? "Refresh calendars" : "Choose calendar"}</button>
-          {calendars.length > 0 && <div className={styles.calendarList}>{calendars.map(calendar => <button key={calendar.id} onClick={() => chooseCalendar(calendar)} className={calendar.id === status.selected_calendar_id ? styles.selectedCalendar : ""}><strong>{calendar.name}</strong><span>{calendar.primary ? "Primary" : calendar.accessRole}</span></button>)}</div>}
-        </section>
+        <section className={styles.panel}><div className={styles.panelHeader}><div><CalendarDays size={19} /><h2>Connection</h2></div><span className={styles.connected}>Connected</span></div><dl><div><dt>Google account</dt><dd>{status.google_account_email || "Connected account"}</dd></div><div><dt>Managed calendar</dt><dd>{status.selected_calendar_name || "Not selected"}</dd></div></dl><button className={styles.secondary} disabled={busy} onClick={loadCalendars}><RefreshCcw size={16} /> {calendars.length ? "Refresh calendars" : "Choose calendar"}</button>{calendars.length > 0 && <div className={styles.calendarList}>{calendars.map(calendar => <button key={calendar.id} onClick={() => chooseCalendar(calendar)} className={calendar.id === status.selected_calendar_id ? styles.selectedCalendar : ""}><strong>{calendar.name}</strong><span>{calendar.primary ? "Primary" : calendar.accessRole}</span></button>)}</div>}</section>
 
-        <section className={styles.panel}>
-          <div className={styles.panelHeader}><div><Clock3 size={19} /><h2>Block priority time</h2></div></div>
-          <label>Task<select value={taskId} onChange={event => setTaskId(event.target.value)}>{activeTasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
-          <div className={styles.fields}><label>Date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label><label>Start<input type="time" value={startTime} onChange={event => setStartTime(event.target.value)} /></label><label>Duration<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={30}>30 min</option><option value={45}>45 min</option><option value={60}>1 hour</option><option value={90}>90 min</option><option value={120}>2 hours</option></select></label></div>
-          <button disabled={busy || !selectedTask || !status.selected_calendar_id} onClick={createBlock}><Plus size={17} /> Add protected time</button>
-          {!status.selected_calendar_id && <p className={styles.hint}>Choose a writable calendar first.</p>}
-        </section>
+        <section className={styles.panel}><div className={styles.panelHeader}><div><Clock3 size={19} /><h2>Block priority time</h2></div></div><label>Task<select value={taskId} onChange={event => setTaskId(event.target.value)}>{activeTasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label><div className={styles.fields}><label>Date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label><label>Start<input type="time" value={startTime} onChange={event => setStartTime(event.target.value)} /></label><label>Duration<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={30}>30 min</option><option value={45}>45 min</option><option value={60}>1 hour</option><option value={90}>90 min</option><option value={120}>2 hours</option></select></label></div><button disabled={busy || !selectedTask || !status.selected_calendar_id} onClick={createBlock}><Plus size={17} /> Add protected time</button>{!status.selected_calendar_id && <p className={styles.hint}>Choose a writable calendar first.</p>}</section>
 
-        <section className={`${styles.panel} ${styles.dayPanel}`}>
-          <div className={styles.panelHeader}><div><CalendarDays size={19} /><h2>{new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</h2></div><button className={styles.iconButton} disabled={busy || !status.selected_calendar_id} onClick={() => loadDay()}><RefreshCcw size={16} /></button></div>
-          <div className={styles.events}>{events.map(event => <article key={event.id}><time>{event.allDay ? "All day" : `${new Date(event.start).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(event.end).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}</time><strong>{event.title}</strong></article>)}{events.length === 0 && <p className={styles.hint}>No events loaded for this day.</p>}</div>
-        </section>
+        <section className={`${styles.panel} ${styles.planPanel}`}><div className={styles.panelHeader}><div><Sparkles size={19} /><h2>Plan my priorities</h2></div></div><p className={styles.hint}>Uses today’s priority tasks first, fits them around existing events, and adds a 10-minute buffer around meetings.</p><div className={styles.fields}><label>Workday starts<input type="time" value={workdayStart} onChange={event => setWorkdayStart(event.target.value)} /></label><label>Workday ends<input type="time" value={workdayEnd} onChange={event => setWorkdayEnd(event.target.value)} /></label><label>Date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label></div><button className={styles.secondary} disabled={busy || !status.selected_calendar_id} onClick={buildPlan}><Sparkles size={16} /> Preview proposed plan</button>{proposals.length > 0 && <div className={styles.proposals}>{proposals.map(block => <article key={`${block.taskId}-${block.startsAt}`}><div><strong>{block.title}</strong><span>Priority {block.priority} · {block.minutes} min</span></div><time>{new Date(block.startsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–{new Date(block.endsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</time></article>)}<button disabled={busy} onClick={applyPlan}><CheckCircle2 size={16} /> Apply this plan</button></div>}</section>
+
+        <section className={`${styles.panel} ${styles.dayPanel}`}><div className={styles.panelHeader}><div><CalendarDays size={19} /><h2>{new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</h2></div><button className={styles.iconButton} disabled={busy || !status.selected_calendar_id} onClick={() => loadDay()}><RefreshCcw size={16} /></button></div><div className={styles.events}>{events.map(event => <article key={event.id}><time>{event.allDay ? "All day" : `${new Date(event.start).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(event.end).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}</time><strong>{event.title}</strong></article>)}{events.length === 0 && <p className={styles.hint}>No events loaded for this day.</p>}</div></section>
       </div>}
   </main>;
 }
