@@ -8,6 +8,20 @@ export type ProposedCalendarBlock = { id: string; taskId: string; title: string;
 const minutesBetween = (start: Date, end: Date) => Math.max(0, Math.round((end.getTime() - start.getTime()) / 60_000));
 const clampToDay = (date: string, time: string) => new Date(`${date}T${time}:00`);
 
+const fallbackRevenueRoutine: CalendarRoutine = {
+  id: "default-revenue",
+  title: "Revenue generation",
+  category: "income",
+  daysOfWeek: [1, 2, 3, 4, 5],
+  preferredStart: "09:00",
+  preferredEnd: "12:00",
+  minimumMinutes: 60,
+  idealMinutes: 90,
+  priority: 1,
+  canSplit: true,
+  isActive: true,
+};
+
 export function findAvailableWindows(date: string, events: GoogleCalendarEvent[], workdayStart = "09:00", workdayEnd = "17:30", bufferMinutes = 10): PlanningWindow[] {
   const dayStart = clampToDay(date, workdayStart);
   const dayEnd = clampToDay(date, workdayEnd);
@@ -38,8 +52,9 @@ export function proposeWholeDayPlan(tasks: V2Task[], routines: CalendarRoutine[]
   const proposals: ProposedCalendarBlock[] = [];
   const weekday = new Date(`${date}T12:00:00`).getDay();
   const activeTasks = [...tasks].filter(task => task.status !== "complete" && task.status !== "cancelled").sort((a, b) => a.priority - b.priority || (a.dueOn ?? "9999-12-31").localeCompare(b.dueOn ?? "9999-12-31") || a.position - b.position);
+  const effectiveRoutines = routines.length ? routines : [fallbackRevenueRoutine];
 
-  for (const routine of routines.filter(item => item.isActive && item.daysOfWeek.includes(weekday)).sort((a, b) => a.priority - b.priority)) {
+  for (const routine of effectiveRoutines.filter(item => item.isActive && item.daysOfWeek.includes(weekday)).sort((a, b) => a.priority - b.priority)) {
     const task = activeTasks.find(item => routine.category === "income" ? item.category === "cash" || /outreach|prospect|follow.?up|proposal|application|revenue|list/i.test(item.title) : item.category === routine.category) ?? activeTasks[0];
     if (!task) continue;
     const desired = Math.max(routine.minimumMinutes, routine.idealMinutes);
