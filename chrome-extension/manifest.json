@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Command Centre Capture",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Capture the current webpage as a Command Centre task.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "activeTab", "tabs"],
+  "action": {
+    "default_title": "Command Centre Capture",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
