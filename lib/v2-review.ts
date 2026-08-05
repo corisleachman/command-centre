@@ -11,6 +11,8 @@ export type DailyReview = {
   blockers: string;
 };
 
+export type CompletedTaskSummary = { id: string; title: string; estimatedMinutes: number };
+
 export function localDateKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -22,8 +24,12 @@ export function unfinishedBeforeToday(tasks: V2Task[], today = localDateKey()) {
   return tasks.filter(task => task.status !== "complete" && task.status !== "cancelled" && !!task.dueOn && task.dueOn < today);
 }
 
-export function completedToday(tasks: V2Task[], today = localDateKey()) {
-  return tasks.filter(task => task.status === "complete" && task.completedAt?.slice(0, 10) === today);
+export async function loadCompletedToday(client: SupabaseClient, userId: string, today = localDateKey()): Promise<CompletedTaskSummary[]> {
+  const start = `${today}T00:00:00.000Z`;
+  const end = `${today}T23:59:59.999Z`;
+  const { data, error } = await client.from("tasks").select("id,title,estimated_minutes").eq("user_id", userId).gte("completed_at", start).lte("completed_at", end).order("completed_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(row => ({ id: row.id, title: row.title, estimatedMinutes: row.estimated_minutes ?? 0 }));
 }
 
 export async function loadDailyReview(client: SupabaseClient, userId: string, reviewDate = localDateKey()): Promise<DailyReview> {
@@ -55,6 +61,6 @@ export async function saveDailyReview(client: SupabaseClient, userId: string, re
 }
 
 export async function carryTaskForward(client: SupabaseClient, userId: string, taskId: string, today = localDateKey()) {
-  const { error } = await client.from("tasks").update({ due_on: today, updated_at: new Date().toISOString() }).eq("id", taskId).eq("user_id", userId);
+  const { error } = await client.from("tasks").update({ due_on: today, is_today: true, updated_at: new Date().toISOString() }).eq("id", taskId).eq("user_id", userId);
   if (error) throw error;
 }
