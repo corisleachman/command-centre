@@ -7,6 +7,7 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
     {children}
     <nav className={styles.dock} aria-label="Command Centre V2 tools">
       <Link href="/v2"><Home size={17} /><span>Dashboard</span></Link>
+      <Link href="/v2/tasks"><ListChecks size={17} /><span>Tasks</span></Link>
       <Link href="/v2/daily"><PlayCircle size={17} /><span>Execute</span></Link>
       <Link href="/v2/review"><RefreshCcw size={17} /><span>Review</span></Link>
       <Link href="/v2/capture"><Search size={17} /><span>Capture</span></Link>
