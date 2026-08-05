@@ -1,0 +1,2 @@
+-- Placeholder for legacy remote migration version 20260805.
+-- The workflow repairs the orphaned remote history entry before applying current migrations.
