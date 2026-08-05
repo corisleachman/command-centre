@@ -19,9 +19,11 @@ export default function CapturePage() {
   const [category, setCategory] = useState("build");
   const [priority, setPriority] = useState(3);
   const [initiativeId, setInitiativeId] = useState("");
+  const [milestoneId, setMilestoneId] = useState("");
   const [addToday, setAddToday] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [capturedTaskId, setCapturedTaskId] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -38,16 +40,21 @@ export default function CapturePage() {
     loadV2Workspace(supabase, user.id).then(setWorkspace).catch(reason => setMessage(reason instanceof Error ? reason.message : "Unable to load data."));
   }, [user]);
 
+  const selectedInitiative = workspace.initiatives.find(item => item.id === initiativeId);
+  const milestones = selectedInitiative?.workstreams.flatMap(workstream => workstream.milestones) ?? [];
+
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return workspace.allTasks.slice(0, 20);
-    return workspace.allTasks.filter(task => `${task.title} ${task.notes ?? ""} ${task.category}`.toLowerCase().includes(needle)).slice(0, 30);
+    const ranked = [...workspace.allTasks].sort((a, b) => b.position - a.position);
+    if (!needle) return ranked.slice(0, 20);
+    return ranked.filter(task => `${task.title} ${task.notes ?? ""} ${task.category}`.toLowerCase().includes(needle)).slice(0, 30);
   }, [query, workspace.allTasks]);
 
   async function capture() {
     if (!supabase || !user || !title.trim()) return;
     setSaving(true);
     setMessage("");
+    setCapturedTaskId("");
     try {
       const notes = url.trim() ? `Captured from: ${url.trim()}` : null;
       const { data, error } = await supabase.from("tasks").insert({
@@ -60,6 +67,7 @@ export default function CapturePage() {
         estimated_minutes: 30,
         notes,
         initiative_id: initiativeId || null,
+        milestone_id: milestoneId || null,
         is_today: addToday,
         is_complete: false,
         week_number: 1,
@@ -75,7 +83,9 @@ export default function CapturePage() {
       }
       setTitle("");
       setUrl("");
-      setMessage("Task captured");
+      setMilestoneId("");
+      setCapturedTaskId(data.id);
+      setMessage(addToday ? "Task captured and added to Today" : "Task captured in the Inbox");
       setWorkspace(await loadV2Workspace(supabase, user.id));
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "Unable to capture task.");
@@ -97,15 +107,17 @@ export default function CapturePage() {
           <label>Category<select value={category} onChange={event => setCategory(event.target.value)}><option value="cash">Revenue</option><option value="build">Build</option><option value="health">Health</option><option value="life">Life</option></select></label>
           <label>Priority<select value={priority} onChange={event => setPriority(Number(event.target.value))}><option value={5}>Critical</option><option value={4}>High</option><option value={3}>Normal</option><option value={2}>Low</option></select></label>
         </div>
-        <label>Initiative<select value={initiativeId} onChange={event => setInitiativeId(event.target.value)}><option value="">Unassigned</option>{workspace.initiatives.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+        <label>Initiative<select value={initiativeId} onChange={event => { setInitiativeId(event.target.value); setMilestoneId(""); }}><option value="">Inbox / unassigned</option>{workspace.initiatives.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+        {workspace.initiatives.length === 0 && <p className={styles.message}>No initiatives exist yet. The task will be saved safely in the Inbox. <Link href="/v2/initiatives" target="_blank">Create an initiative</Link> when you are ready to organise it.</p>}
+        <label>Milestone<select value={milestoneId} onChange={event => setMilestoneId(event.target.value)} disabled={!selectedInitiative || milestones.length === 0}><option value="">{!selectedInitiative ? "Choose an initiative first" : milestones.length === 0 ? "No milestones in this initiative" : "No milestone"}</option>{milestones.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
         <label className={styles.checkbox}><input type="checkbox" checked={addToday} onChange={event => setAddToday(event.target.checked)} /> Add to Today</label>
         <button className={styles.primary} disabled={saving || !title.trim()} onClick={() => void capture()}>{saving ? "Saving..." : "Capture task"}<Check size={17} /></button>
-        {message && <p className={styles.message}>{message}</p>}
+        {message && <p className={styles.message}>{message}{capturedTaskId && <> · <Link href={`/v2/workspace?task=${capturedTaskId}`} target="_blank">Open captured task</Link></>}</p>}
       </section>
 
       <section className={styles.card}>
         <div className={styles.searchBox}><Search size={18} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks, notes or categories" /></div>
-        <div className={styles.results}>{results.map(task => <article key={task.id}><div><strong>{task.title}</strong><span>{task.category} · priority {task.priority}</span></div><div className={styles.actions}><Link href={`/v2/workspace?task=${task.id}`}>Open <ArrowRight size={15} /></Link>{task.links[0] && <a href={task.links[0].url} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>}</div></article>)}</div>
+        <div className={styles.results}>{results.map(task => <article key={task.id}><div><strong>{task.title}</strong><span>{task.category} · priority {task.priority}{!task.initiativeId ? " · Inbox" : ""}</span></div><div className={styles.actions}><Link href={`/v2/workspace?task=${task.id}`}>Open <ArrowRight size={15} /></Link>{task.links[0] && <a href={task.links[0].url} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>}</div></article>)}</div>
       </section>
     </div>
   </main>;
