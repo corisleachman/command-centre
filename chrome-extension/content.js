@@ -44,6 +44,9 @@
 
   button.addEventListener("click", openPanel);
   close.addEventListener("click", closePanel);
+  chrome.runtime.onMessage.addListener(message => {
+    if (message?.type === "CC_OPEN_CAPTURE") openPanel();
+  });
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && panel.classList.contains("cc-open")) closePanel();
   });
