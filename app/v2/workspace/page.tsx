@@ -2,19 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, FileText, Lightbulb, Plus, Trash2 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../../lib/supabase";
-import { loadV2Workspace, type V2Task, type V2Workspace } from "../../../lib/v2-data";
+import { loadV2Workspace, type V2Workspace } from "../../../lib/v2-data";
 import { addSubtask, addTaskEntry, deleteSubtask, deleteTaskEntry, loadTaskDetails, toggleEntryResolved, toggleSubtask, type TaskActivity, type TaskEntry, type TaskSubtask } from "../../../lib/v2-task-details";
 import styles from "./workspace.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
 
 export default function RichTaskWorkspacePage() {
+  const searchParams = useSearchParams();
+  const requestedTaskId = searchParams.get("task");
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspace] = useState(emptyWorkspace);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(requestedTaskId);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>([]);
   const [entries, setEntries] = useState<TaskEntry[]>([]);
   const [activity, setActivity] = useState<TaskActivity[]>([]);
@@ -38,16 +41,20 @@ export default function RichTaskWorkspacePage() {
     setLoading(true);
     loadV2Workspace(supabase, user.id).then(data => {
       setWorkspace(data);
-      setSelectedId(current => current ?? data.todayTasks[0]?.id ?? data.allTasks.find(task => task.status !== "complete")?.id ?? null);
+      setSelectedId(current => {
+        if (current && data.allTasks.some(task => task.id === current)) return current;
+        if (requestedTaskId && data.allTasks.some(task => task.id === requestedTaskId)) return requestedTaskId;
+        return data.todayTasks[0]?.id ?? data.allTasks.find(task => task.status !== "complete")?.id ?? data.allTasks[0]?.id ?? null;
+      });
       setError("");
     }).catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load tasks.")).finally(() => setLoading(false));
-  }, [user]);
+  }, [user, requestedTaskId]);
 
   const selectedTask = workspace.allTasks.find(task => task.id === selectedId) ?? null;
   const visibleTasks = useMemo(() => workspace.allTasks.filter(task => task.title.toLowerCase().includes(query.toLowerCase())), [workspace.allTasks, query]);
 
   async function reloadDetails(task = selectedTask) {
-    if (!supabase || !user || !task) return;
+    if (!supabase || !user || !task) { setSubtasks([]); setEntries([]); setActivity([]); return; }
     try {
       const details = await loadTaskDetails(supabase, user.id, task.id);
       setSubtasks(details.subtasks); setEntries(details.entries); setActivity(details.activity); setError("");
@@ -68,8 +75,8 @@ export default function RichTaskWorkspacePage() {
   return <main className={styles.page}>
     <header className={styles.header}><div><Link href="/v2" className={styles.back}><ArrowLeft size={17} /> Back to dashboard</Link><span>RICH TASK WORKSPACE</span><h1>Turn actions into finished work</h1><p>Break the task down, capture blockers and decisions, and keep the working history in one place.</p></div></header>
     {error && <div className={styles.error}>{error}</div>}
-    {loading ? <div className={styles.state}>Loading workspace...</div> : <section className={styles.layout}>
-      <aside className={styles.taskRail}><input placeholder="Search tasks" value={query} onChange={event => setQuery(event.target.value)} />{visibleTasks.map(task => <button key={task.id} className={task.id === selectedId ? styles.selected : ""} onClick={() => setSelectedId(task.id)}><strong>{task.title}</strong><small>{task.status.replaceAll("_", " ")} · {task.estimatedMinutes} min</small></button>)}</aside>
+    {loading ? <div className={styles.state}>Loading workspace...</div> : workspace.allTasks.length === 0 ? <div className={styles.state}><h2>No tasks yet</h2><p>Capture your first task, then return here to break it into subtasks and working notes.</p><Link href="/v2/capture">Capture a task</Link></div> : <section className={styles.layout}>
+      <aside className={styles.taskRail}><input placeholder="Search tasks" value={query} onChange={event => setQuery(event.target.value)} />{visibleTasks.map(task => <button key={task.id} className={task.id === selectedId ? styles.selected : ""} onClick={() => setSelectedId(task.id)}><strong>{task.title}</strong><small>{task.status.replaceAll("_", " ")} · {task.estimatedMinutes} min</small></button>)}{visibleTasks.length === 0 && <p className={styles.empty}>No tasks match your search.</p>}</aside>
       {selectedTask ? <div className={styles.workspace}>
         <section className={styles.taskIntro}><span>{selectedTask.category.toUpperCase()}</span><h2>{selectedTask.title}</h2><p>{selectedTask.notes || "No working notes yet. Use the existing task editor for the main document, and this workspace for execution detail."}</p></section>
         <div className={styles.columns}>
