@@ -47,6 +47,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'validate' }}
         run: supabase migration list
 
+      - name: Repair orphaned remote migration entry
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase migration repair --status reverted 20260805
+
       - name: Apply pending migrations
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
