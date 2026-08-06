@@ -68,34 +68,22 @@ jobs:
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Repair all legacy date-only history entries
-        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Versions 20260803-20260807 were created by historical eight-digit filenames.
-          # Their files are now represented by unique canonical timestamp versions.
-          # Repair updates migration metadata only and does not roll back schema or application data.
-          supabase migration repair 20260803 20260804 20260805 20260806 20260807 --status reverted
-
-      - name: Show repaired migration history
+      - name: Show migration history
         run: supabase migration list
 
-      - name: Preview one-time canonical migration recovery
+      - name: Preview pending migrations
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          # Required once because canonical replacements sort before newer remote migrations.
-          supabase db push --include-all --dry-run
+          supabase db push --dry-run
 
-      - name: Apply one-time canonical migration recovery
+      - name: Apply pending migrations
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          # Remove --include-all and the legacy repair step after this recovery succeeds.
-          supabase db push --include-all
+          supabase db push
 
       - name: Verify final migration history
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
