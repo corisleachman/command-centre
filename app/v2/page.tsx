@@ -42,10 +42,30 @@ export default function V2Page() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!supabase) { setError("Supabase is not configured for this deployment."); setLoading(false); return; }
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
-    return () => listener.subscription.unsubscribe();
+    if (!supabase) {
+      setError("Supabase is not configured for this deployment.");
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    void supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active) return;
+      if (sessionError) setError(sessionError.message);
+      setUser(data.session?.user ?? null);
+      if (!data.session?.user) setLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+      if (!session?.user) setLoading(false);
+    });
+
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   async function reload() {
@@ -93,7 +113,7 @@ export default function V2Page() {
       <header className={styles.header}>
         <button className={styles.menuButton} onClick={() => setMenuOpen(true)}><Menu /></button>
         <div><span className={styles.kicker}>PRIVATE BETA</span><h1>{view === "Today" ? "Good evening, Coris." : view}</h1><p>{view === "Today" ? "A clear plan, with the detail ready when you need it." : "Built directly on the new relational Command Centre."}</p></div>
-        <div className={styles.headerActions}><span className={styles.liveBadge}><CircleDot size={15} /> Live data</span><button className={styles.addButton} onClick={() => setShowNewTask(true)}><Plus size={17} /> Add task</button><button onClick={() => supabase?.auth.signOut()}><LogOut size={17} /> Sign out</button></div>
+        <div className={styles.headerActions}><span className={styles.liveBadge}><CircleDot size={15} /> Live data</span><button className={styles.addButton} onClick={() => setShowNewTask(true)} disabled={!user || loading}><Plus size={17} /> Add task</button><button onClick={() => supabase?.auth.signOut()}><LogOut size={17} /> Sign out</button></div>
       </header>
 
       {loading && <div className={styles.stateCard}>Loading your Command Centre...</div>}
