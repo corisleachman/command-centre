@@ -73,10 +73,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Versions 20260804-20260807 were created by historical eight-digit filenames.
+          # Versions 20260803-20260807 were created by historical eight-digit filenames.
           # Their files are now represented by unique canonical timestamp versions.
           # Repair updates migration metadata only and does not roll back schema or application data.
-          supabase migration repair 20260804 20260805 20260806 20260807 --status reverted
+          supabase migration repair 20260803 20260804 20260805 20260806 20260807 --status reverted
 
       - name: Show aligned migration history
         run: supabase migration list
