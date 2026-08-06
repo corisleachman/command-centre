@@ -5,18 +5,18 @@ import Link from "next/link";
 import {
   ArrowRight, CalendarDays, Check, CheckCircle2, CircleDot, Clock3, ExternalLink,
   FileText, FolderKanban, Home, Inbox, Layers3, Link2, ListTodo, LogOut, Menu,
-  Plus, Save, Sparkles, Target, Trash2, X
+  Plus, Save, Target, Trash2, X
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
 import {
-  addV2TaskLink, createV2Task, deleteV2TaskLink, loadV2Workspace, setV2TaskComplete,
+  addV2TaskLink, deleteV2TaskLink, loadV2Workspace, setV2TaskComplete,
   updateV2Task, type V2Initiative, type V2Task, type V2TaskDraft, type V2Workspace
 } from "../../lib/v2-data";
+import CreateTaskModal from "./components/CreateTaskModal";
 import styles from "./v2.module.css";
 
 type View = "Today" | "Week" | "Initiatives" | "Inbox";
-
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
 
 function taskMeta(task: V2Task) {
@@ -42,11 +42,7 @@ export default function V2Page() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!supabase) {
-      setError("Supabase is not configured for this deployment.");
-      setLoading(false);
-      return;
-    }
+    if (!supabase) { setError("Supabase is not configured for this deployment."); setLoading(false); return; }
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
     return () => listener.subscription.unsubscribe();
@@ -55,14 +51,9 @@ export default function V2Page() {
   async function reload() {
     if (!supabase || !user) return;
     setLoading(true);
-    try {
-      setWorkspace(await loadV2Workspace(supabase, user.id));
-      setError("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load V2 data.");
-    } finally {
-      setLoading(false);
-    }
+    try { setWorkspace(await loadV2Workspace(supabase, user.id)); setError(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load V2 data."); }
+    finally { setLoading(false); }
   }
 
   useEffect(() => { void reload(); }, [user]);
@@ -80,22 +71,13 @@ export default function V2Page() {
   async function toggleComplete(task: V2Task) {
     if (!supabase || !user) return;
     setSaving(true);
-    try {
-      await setV2TaskComplete(supabase, user.id, task, task.status !== "complete");
-      await reload();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to update task.");
-    } finally {
-      setSaving(false);
-    }
+    try { await setV2TaskComplete(supabase, user.id, task, task.status !== "complete"); await reload(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update task."); }
+    finally { setSaving(false); }
   }
 
   if (!user && !loading) {
-    return <main className={styles.authPage}><div className={styles.authCard}>
-      <span className={styles.kicker}>COMMAND CENTRE V2</span><h1>Sign in through V1 first</h1>
-      <p>V2 uses the same secure Supabase session. Sign in on the current Command Centre, then return here.</p>
-      <Link className={styles.primaryLink} href="/">Open Command Centre V1 <ArrowRight size={18} /></Link>
-    </div></main>;
+    return <main className={styles.authPage}><div className={styles.authCard}><span className={styles.kicker}>COMMAND CENTRE V2</span><h1>Sign in through V1 first</h1><p>V2 uses the same secure Supabase session. Sign in on the current Command Centre, then return here.</p><Link className={styles.primaryLink} href="/">Open Command Centre V1 <ArrowRight size={18} /></Link></div></main>;
   }
 
   return <main className={styles.shell}>
@@ -111,11 +93,7 @@ export default function V2Page() {
       <header className={styles.header}>
         <button className={styles.menuButton} onClick={() => setMenuOpen(true)}><Menu /></button>
         <div><span className={styles.kicker}>PRIVATE BETA</span><h1>{view === "Today" ? "Good evening, Coris." : view}</h1><p>{view === "Today" ? "A clear plan, with the detail ready when you need it." : "Built directly on the new relational Command Centre."}</p></div>
-        <div className={styles.headerActions}>
-          <span className={styles.liveBadge}><CircleDot size={15} /> Live data</span>
-          <button className={styles.addButton} onClick={() => setShowNewTask(true)}><Plus size={17} /> Add task</button>
-          <button onClick={() => supabase?.auth.signOut()}><LogOut size={17} /> Sign out</button>
-        </div>
+        <div className={styles.headerActions}><span className={styles.liveBadge}><CircleDot size={15} /> Live data</span><button className={styles.addButton} onClick={() => setShowNewTask(true)}><Plus size={17} /> Add task</button><button onClick={() => supabase?.auth.signOut()}><LogOut size={17} /> Sign out</button></div>
       </header>
 
       {loading && <div className={styles.stateCard}>Loading your Command Centre...</div>}
@@ -123,40 +101,25 @@ export default function V2Page() {
 
       {!loading && !error && view === "Today" && <>
         <section className={styles.heroGrid}>
-          <article className={styles.mainCard}>
-            <div className={styles.cardHeading}><div><span className={styles.kicker}>TODAY'S FOCUS</span><h2>{todayTasks.length > 0 ? "Only these matter now" : "Your day is clear"}</h2></div><span>{todayTasks.length}/3</span></div>
-            <div className={styles.taskList}>{todayTasks.map((task, index) => <TaskRow key={task.id} task={task} index={index} onOpen={() => setSelectedTaskId(task.id)} onToggle={() => void toggleComplete(task)} disabled={saving} />)}
-              {todayTasks.length === 0 && <div className={styles.empty}><CheckCircle2 /><strong>No active tasks found</strong><p>Add a task or wait for the planner to create your next Top 3.</p></div>}
-            </div>
-          </article>
+          <article className={styles.mainCard}><div className={styles.cardHeading}><div><span className={styles.kicker}>TODAY'S FOCUS</span><h2>{todayTasks.length > 0 ? "Only these matter now" : "Your day is clear"}</h2></div><span>{todayTasks.length}/3</span></div><div className={styles.taskList}>{todayTasks.map((task, index) => <TaskRow key={task.id} task={task} index={index} onOpen={() => setSelectedTaskId(task.id)} onToggle={() => void toggleComplete(task)} disabled={saving} />)}{todayTasks.length === 0 && <div className={styles.empty}><CheckCircle2 /><strong>No active tasks found</strong><p>Add a task or wait for the planner to create your next Top 3.</p></div>}</div></article>
           <article className={styles.summaryCard}><span className={styles.kicker}>EXECUTION SNAPSHOT</span><div className={styles.bigMetric}>{completedCount}<small> completed</small></div><div className={styles.summaryRow}><span><ListTodo size={17} /> Total tasks</span><strong>{workspace.allTasks.length}</strong></div><div className={styles.summaryRow}><span><Layers3 size={17} /> Initiatives</span><strong>{workspace.initiatives.length}</strong></div><div className={styles.summaryRow}><span><Clock3 size={17} /> Planned today</span><strong>{workspace.todayTasks.length}</strong></div></article>
         </section>
-
-        <section className={styles.section}><div className={styles.sectionHeading}><div><span className={styles.kicker}>ACTIVE INITIATIVES</span><h2>Where your work is heading</h2></div><button onClick={() => setView("Initiatives")}>View all <ArrowRight size={16} /></button></div>
-          {workspace.initiatives.length > 0 ? <div className={styles.initiativeGrid}>{workspace.initiatives.slice(0, 3).map(initiative => <InitiativeCard key={initiative.id} initiative={initiative} />)}</div> : <article className={styles.emptyInitiatives}><Layers3 size={28} /><div><h3>No initiatives yet</h3><p>Your tasks are safe and can be assigned as initiatives are created.</p></div></article>}
-        </section>
-
+        <section className={styles.section}><div className={styles.sectionHeading}><div><span className={styles.kicker}>ACTIVE INITIATIVES</span><h2>Where your work is heading</h2></div><button onClick={() => setView("Initiatives")}>View all <ArrowRight size={16} /></button></div>{workspace.initiatives.length > 0 ? <div className={styles.initiativeGrid}>{workspace.initiatives.slice(0, 3).map(initiative => <InitiativeCard key={initiative.id} initiative={initiative} />)}</div> : <article className={styles.emptyInitiatives}><Layers3 size={28} /><div><h3>No initiatives yet</h3><p>Your tasks are safe and can be assigned as initiatives are created.</p></div></article>}</section>
         {workspace.unassignedTasks.length > 0 && <section className={styles.section}><div className={styles.sectionHeading}><div><span className={styles.kicker}>MIGRATED WORK</span><h2>Unassigned tasks</h2></div><span>{workspace.unassignedTasks.length}</span></div><div className={styles.compactList}>{workspace.unassignedTasks.slice(0, 8).map(task => <button key={task.id} onClick={() => setSelectedTaskId(task.id)}><strong>{task.title}</strong><span>{taskMeta(task)}</span></button>)}</div></section>}
       </>}
 
       {!loading && !error && view === "Week" && <section className={styles.pageCard}><span className={styles.kicker}>THIS WEEK</span><h2>All active work</h2><div className={styles.compactList}>{workspace.allTasks.filter(task => task.status !== "complete").map(task => <button key={task.id} onClick={() => setSelectedTaskId(task.id)}><strong>{task.title}</strong><span>{taskMeta(task)}</span></button>)}</div></section>}
-
       {!loading && !error && view === "Initiatives" && <section className={styles.pageCard}><div className={styles.sectionHeading}><div><span className={styles.kicker}>INITIATIVE ENGINE</span><h2>Strategy underneath, execution on the surface</h2></div></div>{workspace.initiatives.length > 0 ? <div className={styles.initiativeGrid}>{workspace.initiatives.map(initiative => <InitiativeCard key={initiative.id} initiative={initiative} />)}</div> : <div className={styles.empty}><FolderKanban /><strong>No relational initiatives found</strong><p>The Song Room backfill will create the first initiative when source data is available.</p></div>}</section>}
-
       {!loading && !error && view === "Inbox" && <section className={styles.pageCard}><span className={styles.kicker}>CAPTURE</span><h2>Unassigned work inbox</h2><p>Tasks land here before being organised into an initiative or plan.</p><div className={styles.compactList}>{workspace.unassignedTasks.map(task => <button key={task.id} onClick={() => setSelectedTaskId(task.id)}><strong>{task.title}</strong><span>{taskMeta(task)}</span></button>)}</div></section>}
     </section>
 
     {selectedTask && user && supabase && <TaskWorkspace task={selectedTask} initiatives={workspace.initiatives} userId={user.id} onClose={() => setSelectedTaskId(null)} onChanged={reload} />}
-    {showNewTask && user && supabase && <NewTaskModal userId={user.id} initiatives={workspace.initiatives} onClose={() => setShowNewTask(false)} onCreated={async () => { setShowNewTask(false); await reload(); }} />}
+    {showNewTask && user && <CreateTaskModal userId={user.id} initiatives={workspace.initiatives} onClose={() => setShowNewTask(false)} onCreated={async () => { setShowNewTask(false); await reload(); }} />}
   </main>;
 }
 
 function TaskRow({ task, index, onOpen, onToggle, disabled }: { task: V2Task; index: number; onOpen: () => void; onToggle: () => void; disabled: boolean }) {
-  return <div className={`${styles.taskRow} ${task.status === "complete" ? styles.taskDone : ""}`}>
-    <button className={styles.taskNumber} onClick={onToggle} disabled={disabled} aria-label={task.status === "complete" ? "Reopen task" : "Complete task"}>{task.status === "complete" ? <Check size={18} /> : index + 1}</button>
-    <button className={styles.taskCopy} onClick={onOpen}><strong>{task.title}</strong><small>{taskMeta(task)}</small></button>
-    <button className={styles.openTask} onClick={onOpen} aria-label="Open task workspace"><ArrowRight size={18} /></button>
-  </div>;
+  return <div className={`${styles.taskRow} ${task.status === "complete" ? styles.taskDone : ""}`}><button className={styles.taskNumber} onClick={onToggle} disabled={disabled} aria-label={task.status === "complete" ? "Reopen task" : "Complete task"}>{task.status === "complete" ? <Check size={18} /> : index + 1}</button><button className={styles.taskCopy} onClick={onOpen}><strong>{task.title}</strong><small>{taskMeta(task)}</small></button><button className={styles.openTask} onClick={onOpen} aria-label="Open task workspace"><ArrowRight size={18} /></button></div>;
 }
 
 function InitiativeCard({ initiative }: { initiative: V2Initiative }) {
@@ -198,13 +161,4 @@ function TaskWorkspace({ task, initiatives, userId, onClose, onChanged }: { task
     <section className={styles.resourceSection}><div><span className={styles.labelHeading}><Link2 size={17} /> Linked resources</span>{task.links.map(link => <div className={styles.resourceRow} key={link.id}><a href={link.url} target="_blank" rel="noreferrer"><strong>{link.label}</strong><small>{link.url}</small></a><a href={link.url} target="_blank" rel="noreferrer"><ExternalLink size={16} /></a><button onClick={async () => { if (!supabase) return; await deleteV2TaskLink(supabase, userId, link.id); await onChanged(); }}><Trash2 size={16} /></button></div>)}</div><div className={styles.linkForm}><input placeholder="Link name" value={linkLabel} onChange={event => setLinkLabel(event.target.value)} /><input placeholder="Paste URL" value={linkUrl} onChange={event => setLinkUrl(event.target.value)} /><button onClick={() => void addLink()} disabled={busy || !linkUrl.trim()}><Plus size={16} /> Add</button></div></section>
     <div className={styles.modalActions}><span>{message}</span><button className={styles.secondaryAction} onClick={async () => { if (!supabase) return; setBusy(true); await setV2TaskComplete(supabase, userId, task, task.status !== "complete"); await onChanged(); setBusy(false); }}>{task.status === "complete" ? "Reopen task" : "Mark complete"}</button><button className={styles.primaryAction} onClick={() => void save()} disabled={busy || !draft.title.trim()}><Save size={17} /> Save changes</button></div>
   </div></div>;
-}
-
-function NewTaskModal({ userId, initiatives, onClose, onCreated }: { userId: string; initiatives: V2Initiative[]; onClose: () => void; onCreated: () => Promise<void> }) {
-  const [draft, setDraft] = useState<V2TaskDraft>({ title: "", category: "build", priority: 3, estimatedMinutes: 30, initiativeId: null, milestoneId: null, notes: "" });
-  const [busy, setBusy] = useState(false);
-  const selectedInitiative = initiatives.find(item => item.id === draft.initiativeId);
-  const milestones = selectedInitiative?.workstreams.flatMap(workstream => workstream.milestones) ?? [];
-  async function create() { if (!supabase || !draft.title.trim()) return; setBusy(true); try { await createV2Task(supabase, userId, { ...draft, title: draft.title.trim() }); await onCreated(); } finally { setBusy(false); } }
-  return <div className={styles.modalBackdrop} onClick={onClose}><div className={styles.smallModal} onClick={event => event.stopPropagation()}><div className={styles.modalHeader}><div><span className={styles.kicker}>NEW ACTION</span><h2>Create a finishable task</h2></div><button onClick={onClose}><X /></button></div><label>Task title<input autoFocus value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} placeholder="Start with a verb..." /></label><div className={styles.formGrid}><label>Category<select value={draft.category} onChange={event => setDraft({ ...draft, category: event.target.value })}><option value="cash">Revenue</option><option value="build">Build</option><option value="health">Health</option><option value="life">Life</option></select></label><label>Estimate<input type="number" min={5} step={5} value={draft.estimatedMinutes} onChange={event => setDraft({ ...draft, estimatedMinutes: Number(event.target.value) })} /></label></div><label>Initiative<select value={draft.initiativeId ?? ""} onChange={event => setDraft({ ...draft, initiativeId: event.target.value || null, milestoneId: null })}><option value="">Inbox / unassigned</option>{initiatives.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label>Milestone<select value={draft.milestoneId ?? ""} onChange={event => setDraft({ ...draft, milestoneId: event.target.value || null })} disabled={!selectedInitiative}><option value="">No milestone</option>{milestones.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label>Notes<textarea value={draft.notes ?? ""} onChange={event => setDraft({ ...draft, notes: event.target.value })} placeholder="Optional context or starting notes" /></label><div className={styles.modalActions}><button className={styles.secondaryAction} onClick={onClose}>Cancel</button><button className={styles.primaryAction} onClick={() => void create()} disabled={busy || !draft.title.trim()}><Plus size={17} /> Create task</button></div></div></div>;
 }
