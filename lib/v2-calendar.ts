@@ -11,7 +11,19 @@ export type CalendarConnectionStatus = {
 };
 
 export type GoogleCalendarOption = { id: string; name: string; primary: boolean; accessRole: string };
-export type GoogleCalendarEvent = { id: string; title: string; start: string; end: string; allDay: boolean; status: string };
+export type GoogleCalendarEvent = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  status: string;
+  htmlLink?: string | null;
+  editable?: boolean;
+  managed?: boolean;
+  taskId?: string | null;
+  blockId?: string | null;
+};
 
 export async function loadCalendarStatus(client: SupabaseClient, userId: string) {
   const { data, error } = await client.from("google_calendar_connection_status").select("*").eq("user_id", userId).maybeSingle();
