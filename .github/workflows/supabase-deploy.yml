@@ -47,32 +47,36 @@ jobs:
           shopt -s nullglob
           for migration in supabase/migrations/*.sql; do
             filename="$(basename "$migration")"
-            version="${filename%%_*}"
-            case "$version" in
-              20260803|20260804)
-                # Historical date-only files already committed before canonical timestamps were adopted.
-                ;;
-              *)
-                if [[ ! "$version" =~ ^[0-9]{14}$ ]]; then
-                  echo "Invalid migration filename: $filename"
-                  echo "New migrations must use a 14-digit timestamp prefix."
-                  exit 1
-                fi
-                ;;
-            esac
+            if [[ ! "$filename" =~ ^[0-9]{14}_.+\.sql$ ]]; then
+              echo "Invalid migration filename: $filename"
+              echo "Every migration must use a unique 14-digit timestamp prefix."
+              exit 1
+            fi
           done
+
+      - name: Validate unique migration versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          duplicates="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | cut -d_ -f1 | sort | uniq -d)"
+          if [ -n "$duplicates" ]; then
+            echo "Duplicate migration versions detected:"
+            echo "$duplicates"
+            exit 1
+          fi
 
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Repair orphaned legacy history entries
+      - name: Repair all legacy date-only history entries
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          # These date-only versions were applied remotely by earlier files that were later renamed.
-          # Repair changes migration metadata only. It does not undo schema or application data.
-          supabase migration repair 20260805 20260806 --status reverted
+          # Versions 20260804-20260807 were created by historical eight-digit filenames.
+          # Their files are now represented by unique canonical timestamp versions.
+          # Repair updates migration metadata only and does not roll back schema or application data.
+          supabase migration repair 20260804 20260805 20260806 20260807 --status reverted
 
       - name: Show aligned migration history
         run: supabase migration list
