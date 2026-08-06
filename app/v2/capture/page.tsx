@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, ExternalLink, Plus, Search } from "lucide-react";
+import { ArrowRight, ExternalLink, Plus, Search } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../../lib/supabase";
 import { loadV2Workspace, type V2Workspace } from "../../../lib/v2-data";
+import CreateTaskModal from "../components/CreateTaskModal";
 import styles from "./capture.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
@@ -14,34 +15,32 @@ export default function CapturePage() {
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspace] = useState<V2Workspace>(emptyWorkspace);
   const [query, setQuery] = useState("");
-  const [title, setTitle] = useState("");
-  const [url, setUrl] = useState("");
-  const [category, setCategory] = useState("build");
-  const [priority, setPriority] = useState(3);
-  const [initiativeId, setInitiativeId] = useState("");
-  const [milestoneId, setMilestoneId] = useState("");
-  const [addToday, setAddToday] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [initialTitle, setInitialTitle] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState("");
   const [capturedTaskId, setCapturedTaskId] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setTitle(params.get("title") ?? "");
-    setUrl(params.get("url") ?? "");
+    const title = params.get("title") ?? "";
+    const url = params.get("url") ?? "";
+    setInitialTitle(title);
+    setSourceUrl(url);
+    if (title || url || params.get("create") === "1") setCreating(true);
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
+  async function reload() {
     if (!supabase || !user) return;
-    loadV2Workspace(supabase, user.id).then(setWorkspace).catch(reason => setMessage(reason instanceof Error ? reason.message : "Unable to load data."));
-  }, [user]);
+    try { setWorkspace(await loadV2Workspace(supabase, user.id)); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : "Unable to load data."); }
+  }
 
-  const selectedInitiative = workspace.initiatives.find(item => item.id === initiativeId);
-  const milestones = selectedInitiative?.workstreams.flatMap(workstream => workstream.milestones) ?? [];
+  useEffect(() => { if (user) void reload(); }, [user]);
 
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -50,68 +49,16 @@ export default function CapturePage() {
     return ranked.filter(task => `${task.title} ${task.notes ?? ""} ${task.category}`.toLowerCase().includes(needle)).slice(0, 30);
   }, [query, workspace.allTasks]);
 
-  async function capture() {
-    if (!supabase || !user || !title.trim()) return;
-    setSaving(true);
-    setMessage("");
-    setCapturedTaskId("");
-    try {
-      const notes = url.trim() ? `Captured from: ${url.trim()}` : null;
-      const { data, error } = await supabase.from("tasks").insert({
-        user_id: user.id,
-        title: title.trim(),
-        category,
-        points: priority,
-        status: "ready",
-        priority,
-        estimated_minutes: 30,
-        notes,
-        initiative_id: initiativeId || null,
-        milestone_id: milestoneId || null,
-        is_today: addToday,
-        is_complete: false,
-        week_number: 1,
-        energy_required: "standard",
-        work_type: category === "cash" ? "communication" : category === "health" ? "health" : category === "life" ? "life" : "deep_work",
-        preferred_time: "any",
-        position: Date.now()
-      }).select("id").single();
-      if (error) throw error;
-      if (url.trim()) {
-        const { error: linkError } = await supabase.from("task_links").insert({ user_id: user.id, task_id: data.id, label: "Source page", url: url.trim(), position: 0 });
-        if (linkError) throw linkError;
-      }
-      setTitle("");
-      setUrl("");
-      setMilestoneId("");
-      setCapturedTaskId(data.id);
-      setMessage(addToday ? "Task captured and added to Today" : "Task captured in the Inbox");
-      setWorkspace(await loadV2Workspace(supabase, user.id));
-    } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Unable to capture task.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   if (!user) return <main className={styles.page}><section className={styles.card}><h1>Sign in first</h1><p>Open Command Centre V2 and sign in, then return to capture.</p><Link href="/v2">Open V2</Link></section></main>;
 
   return <main className={styles.page}>
-    <header><span>COMMAND CENTRE V2</span><h1>Search and capture</h1><p>Find existing work or capture what is in front of you.</p></header>
+    <header><span>COMMAND CENTRE V2</span><h1>Search and capture</h1><p>Find existing work or create a fully defined task, with the option to schedule it immediately.</p></header>
     <div className={styles.grid}>
       <section className={styles.card}>
-        <div className={styles.heading}><Plus size={18} /><h2>Quick capture</h2></div>
-        <label>Task<input value={title} onChange={event => setTitle(event.target.value)} placeholder="What needs doing?" /></label>
-        <label>Source URL<input value={url} onChange={event => setUrl(event.target.value)} placeholder="https://..." /></label>
-        <div className={styles.twoCols}>
-          <label>Category<select value={category} onChange={event => setCategory(event.target.value)}><option value="cash">Revenue</option><option value="build">Build</option><option value="health">Health</option><option value="life">Life</option></select></label>
-          <label>Priority<select value={priority} onChange={event => setPriority(Number(event.target.value))}><option value={5}>Critical</option><option value={4}>High</option><option value={3}>Normal</option><option value={2}>Low</option></select></label>
-        </div>
-        <label>Initiative<select value={initiativeId} onChange={event => { setInitiativeId(event.target.value); setMilestoneId(""); }}><option value="">Inbox / unassigned</option>{workspace.initiatives.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-        {workspace.initiatives.length === 0 && <p className={styles.message}>No initiatives exist yet. The task will be saved safely in the Inbox. <Link href="/v2/initiatives" target="_blank">Create an initiative</Link> when you are ready to organise it.</p>}
-        <label>Milestone<select value={milestoneId} onChange={event => setMilestoneId(event.target.value)} disabled={!selectedInitiative || milestones.length === 0}><option value="">{!selectedInitiative ? "Choose an initiative first" : milestones.length === 0 ? "No milestones in this initiative" : "No milestone"}</option>{milestones.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-        <label className={styles.checkbox}><input type="checkbox" checked={addToday} onChange={event => setAddToday(event.target.checked)} /> Add to Today</label>
-        <button className={styles.primary} disabled={saving || !title.trim()} onClick={() => void capture()}>{saving ? "Saving..." : "Capture task"}<Check size={17} /></button>
+        <div className={styles.heading}><Plus size={18} /><h2>Create a task</h2></div>
+        <p>Use the same complete task form as the rest of Command Centre. Create it in the Inbox or turn it straight into protected calendar time.</p>
+        {sourceUrl && <p className={styles.message}>Source ready to attach: {sourceUrl}</p>}
+        <button className={styles.primary} onClick={() => setCreating(true)}>Open task form <Plus size={17} /></button>
         {message && <p className={styles.message}>{message}{capturedTaskId && <> · <Link href={`/v2/workspace?task=${capturedTaskId}`} target="_blank">Open captured task</Link></>}</p>}
       </section>
 
@@ -120,5 +67,21 @@ export default function CapturePage() {
         <div className={styles.results}>{results.map(task => <article key={task.id}><div><strong>{task.title}</strong><span>{task.category} · priority {task.priority}{!task.initiativeId ? " · Inbox" : ""}</span></div><div className={styles.actions}><Link href={`/v2/workspace?task=${task.id}`}>Open <ArrowRight size={15} /></Link>{task.links[0] && <a href={task.links[0].url} target="_blank" rel="noreferrer"><ExternalLink size={15} /></a>}</div></article>)}</div>
       </section>
     </div>
+
+    {creating && <CreateTaskModal
+      userId={user.id}
+      initiatives={workspace.initiatives}
+      initialTitle={initialTitle}
+      sourceUrl={sourceUrl}
+      onClose={() => setCreating(false)}
+      onCreated={async ({ taskId, scheduled }) => {
+        setCreating(false);
+        setCapturedTaskId(taskId);
+        setMessage(scheduled ? "Task created and added to your calendar" : "Task created in Command Centre");
+        setInitialTitle("");
+        setSourceUrl("");
+        await reload();
+      }}
+    />}
   </main>;
 }
