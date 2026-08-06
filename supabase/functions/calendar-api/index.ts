@@ -16,13 +16,8 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
 
-function bytesToB64(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes));
-}
-
-function b64ToBytes(value: string) {
-  return Uint8Array.from(atob(value), char => char.charCodeAt(0));
-}
+function bytesToB64(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)); }
+function b64ToBytes(value: string) { return Uint8Array.from(atob(value), char => char.charCodeAt(0)); }
 
 async function cryptoKey() {
   const raw = b64ToBytes(TOKEN_KEY);
@@ -106,7 +101,7 @@ Deno.serve(async request => {
     const accessToken = token.access_token as string;
 
     if (action === "calendars") {
-      const result = await googleFetch("/users/me/calendarList?minAccessRole=writer", accessToken);
+      const result = await googleFetch("/users/me/calendarList?minAccessRole=reader", accessToken);
       return json({ calendars: (result.items ?? []).map((item: any) => ({ id: item.id, name: item.summary, primary: !!item.primary, accessRole: item.accessRole })) });
     }
 
@@ -116,12 +111,29 @@ Deno.serve(async request => {
       return json({ selected: true });
     }
 
-    const calendarId = encodeURIComponent(body.calendarId || connection.selected_calendar_id || "primary");
+    const selectedCalendarId = body.calendarId || connection.selected_calendar_id || "primary";
+    const calendarId = encodeURIComponent(selectedCalendarId);
 
     if (action === "events") {
       const params = new URLSearchParams({ timeMin: body.timeMin, timeMax: body.timeMax, singleEvents: "true", orderBy: "startTime", maxResults: "250" });
-      const result = await googleFetch(`/calendars/${calendarId}/events?${params}`, accessToken);
-      return json({ events: (result.items ?? []).map((item: any) => ({ id: item.id, title: item.summary || "Busy", start: item.start?.dateTime || item.start?.date, end: item.end?.dateTime || item.end?.date, allDay: !!item.start?.date, status: item.status })) });
+      const [result, calendar] = await Promise.all([
+        googleFetch(`/calendars/${calendarId}/events?${params}`, accessToken),
+        googleFetch(`/calendars/${calendarId}`, accessToken),
+      ]);
+      const editable = ["owner", "writer"].includes(calendar.accessRole || "");
+      return json({ events: (result.items ?? []).map((item: any) => ({
+        id: item.id,
+        title: item.summary || "Busy",
+        start: item.start?.dateTime || item.start?.date,
+        end: item.end?.dateTime || item.end?.date,
+        allDay: !!item.start?.date,
+        status: item.status,
+        htmlLink: item.htmlLink || null,
+        editable,
+        managed: item.extendedProperties?.private?.commandCentreManaged === "true",
+        taskId: item.extendedProperties?.private?.commandCentreTaskId || null,
+        blockId: item.extendedProperties?.private?.commandCentreBlockId || null,
+      })) });
     }
 
     if (action === "createBlock") {
@@ -143,6 +155,30 @@ Deno.serve(async request => {
         throw error;
       }
       return json({ blockId, eventId: event.id, htmlLink: event.htmlLink });
+    }
+
+    if (action === "updateEvent") {
+      if (!body.eventId) return json({ error: "Event ID is required." }, 400);
+      const eventPath = `/calendars/${calendarId}/events/${encodeURIComponent(body.eventId)}`;
+      const event = await googleFetch(eventPath, accessToken, {
+        method: "PATCH",
+        body: JSON.stringify({
+          summary: body.title,
+          start: { dateTime: body.startsAt, timeZone: body.timeZone || "Europe/London" },
+          end: { dateTime: body.endsAt, timeZone: body.timeZone || "Europe/London" },
+        }),
+      });
+      if (body.blockId) {
+        await admin.from("calendar_blocks").update({ starts_at: body.startsAt, ends_at: body.endsAt, status: "moved", updated_at: new Date().toISOString() }).eq("id", body.blockId).eq("user_id", user.id);
+      }
+      return json({ updated: true, eventId: event.id });
+    }
+
+    if (action === "deleteEvent") {
+      if (!body.eventId) return json({ error: "Event ID is required." }, 400);
+      await googleFetch(`/calendars/${calendarId}/events/${encodeURIComponent(body.eventId)}`, accessToken, { method: "DELETE" });
+      if (body.blockId) await admin.from("calendar_blocks").delete().eq("id", body.blockId).eq("user_id", user.id);
+      return json({ deleted: true });
     }
 
     if (action === "moveBlock" || action === "deleteBlock") {
