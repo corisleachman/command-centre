@@ -116,11 +116,12 @@ Deno.serve(async request => {
 
     if (action === "events") {
       const params = new URLSearchParams({ timeMin: body.timeMin, timeMax: body.timeMax, singleEvents: "true", orderBy: "startTime", maxResults: "250" });
-      const [result, calendar] = await Promise.all([
+      const [result, calendarList] = await Promise.all([
         googleFetch(`/calendars/${calendarId}/events?${params}`, accessToken),
-        googleFetch(`/calendars/${calendarId}`, accessToken),
+        googleFetch("/users/me/calendarList?minAccessRole=reader", accessToken),
       ]);
-      const editable = ["owner", "writer"].includes(calendar.accessRole || "");
+      const calendarEntry = (calendarList.items ?? []).find((item: any) => item.id === selectedCalendarId);
+      const editable = ["owner", "writer"].includes(calendarEntry?.accessRole || "");
       return json({ events: (result.items ?? []).map((item: any) => ({
         id: item.id,
         title: item.summary || "Busy",
