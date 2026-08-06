@@ -78,22 +78,28 @@ jobs:
           # Repair updates migration metadata only and does not roll back schema or application data.
           supabase migration repair 20260803 20260804 20260805 20260806 20260807 --status reverted
 
-      - name: Show aligned migration history
+      - name: Show repaired migration history
         run: supabase migration list
 
-      - name: Preview pending migrations
+      - name: Preview one-time canonical migration recovery
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          supabase db push --dry-run
+          # Required once because canonical replacements sort before newer remote migrations.
+          supabase db push --include-all --dry-run
 
-      - name: Apply pending migrations
+      - name: Apply one-time canonical migration recovery
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          supabase db push
+          # Remove --include-all and the legacy repair step after this recovery succeeds.
+          supabase db push --include-all
+
+      - name: Verify final migration history
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
+        run: supabase migration list
 
       - name: Deploy Edge Functions
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
