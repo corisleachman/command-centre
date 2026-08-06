@@ -19,9 +19,12 @@ import styles from "./calendar.module.css";
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
 const WORKDAY_START = 9 * 60;
 const WORKDAY_END = 17 * 60 + 30;
+const MAX_WEEKLY_PROPOSALS = 5;
+const MAX_PER_INITIATIVE = 2;
 type ViewMode = "week" | "day";
 type DayPart = "morning" | "afternoon" | "auto";
 type WeekEvents = Record<string, GoogleCalendarEvent[]>;
+type ProposedTaskBlock = { task: V2Task; day: Date; startsAt: string; endsAt: string };
 
 function minutesSinceMidnight(value: string) {
   const date = new Date(value);
@@ -74,9 +77,13 @@ export default function UnifiedCalendarPage() {
   const [view, setView] = useState<ViewMode>("week");
   const [query, setQuery] = useState("");
   const [selectedEvent, setSelectedEvent] = useState<GoogleCalendarEvent | null>(null);
+  const [proposals, setProposals] = useState<ProposedTaskBlock[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -115,10 +122,10 @@ export default function UnifiedCalendarPage() {
   const visibleDays = view === "day"
     ? days.filter(day => dateKey(day) === selectedDate).length ? days.filter(day => dateKey(day) === selectedDate) : [new Date(`${selectedDate}T12:00:00`)]
     : days;
-  const weekKeys = useMemo(() => new Set(days.map(dateKey)), [days]);
   const activeTasks = workspace.allTasks.filter(task => task.status !== "complete" && task.status !== "cancelled");
+  const visibleEvents = Object.values(eventsByDay).flat().filter(event => event.status !== "cancelled");
   const backlog = activeTasks
-    .filter(task => !task.dueOn || !weekKeys.has(task.dueOn))
+    .filter(task => !visibleEvents.some(event => eventMatchesTask(event, task)))
     .filter(task => task.title.toLowerCase().includes(query.toLowerCase()));
   const calendarConnected = status?.status === "connected" && Boolean(status.selected_calendar_id);
   const initiativeTitle = (task: V2Task) => workspace.initiatives.find(item => item.id === task.initiativeId)?.title ?? "Unassigned";
@@ -147,6 +154,8 @@ export default function UnifiedCalendarPage() {
   }
 
   useEffect(() => {
+    setProposals([]);
+    setSelectedEventIds(new Set());
     if (!loading && calendarConnected) void loadEvents();
     if (!calendarConnected) setEventsByDay({});
   }, [loading, status?.selected_calendar_id, anchor, selectedDate, view]);
@@ -175,7 +184,7 @@ export default function UnifiedCalendarPage() {
     }
     const slot = findFreeSlot(day, task.estimatedMinutes, existing, part);
     if (!slot) { setError(`No suitable ${part === "auto" ? "" : `${part} `}slot is available.`); return; }
-    setBusy(true); setError(""); setMessage("");
+    setBusy(true); setError(""); setMessage(""); setProgress(`Scheduling “${task.title}”…`);
     try {
       await callCalendar(supabase, "createBlock", {
         taskId: task.id, title: task.title, startsAt: slot.startsAt, endsAt: slot.endsAt,
@@ -187,40 +196,103 @@ export default function UnifiedCalendarPage() {
       await loadEvents();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to schedule the task.");
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setProgress(""); }
   }
 
-  async function autoPlan(targetDays: Date[]) {
-    if (!supabase || !user || !status?.selected_calendar_id) return;
+  function buildPlan(targetDays: Date[]) {
     const candidates = [...backlog].sort((a, b) => b.priority - a.priority || a.position - b.position);
     if (!candidates.length) { setMessage("There are no unscheduled tasks to place."); return; }
-    setBusy(true); setError(""); setMessage("");
+
     const working: WeekEvents = Object.fromEntries(targetDays.map(day => [dateKey(day), [...(eventsByDay[dateKey(day)] ?? [])]]));
-    let scheduled = 0;
+    const initiativeCounts = new Map<string, number>();
+    const next: ProposedTaskBlock[] = [];
+
+    for (const task of candidates) {
+      if (next.length >= (view === "week" ? MAX_WEEKLY_PROPOSALS : 3)) break;
+      const group = task.initiativeId ?? "unassigned";
+      if ((initiativeCounts.get(group) ?? 0) >= MAX_PER_INITIATIVE) continue;
+      let choice: ProposedTaskBlock | null = null;
+      for (const day of targetDays) {
+        const key = dateKey(day);
+        const slot = findFreeSlot(day, task.estimatedMinutes, working[key], "auto");
+        if (slot) { choice = { task, day, startsAt: slot.startsAt, endsAt: slot.endsAt }; break; }
+      }
+      if (!choice) continue;
+      next.push(choice);
+      initiativeCounts.set(group, (initiativeCounts.get(group) ?? 0) + 1);
+      working[dateKey(choice.day)].push({ id: `proposal-${task.id}`, title: task.title, start: choice.startsAt, end: choice.endsAt, allDay: false, status: "confirmed", editable: true, managed: true, taskId: task.id });
+    }
+
+    setProposals(next);
+    setError("");
+    setMessage(next.length ? `Review ${next.length} proposed block${next.length === 1 ? "" : "s"} before adding anything to Calendar.` : "No suitable free slots were found.");
+  }
+
+  async function applyPlan() {
+    if (!supabase || !user || !status?.selected_calendar_id || !proposals.length) return;
+    setBusy(true); setError(""); setMessage("");
     try {
-      for (const task of candidates) {
-        let choice: { day: Date; slot: { startsAt: string; endsAt: string } } | null = null;
-        for (const day of targetDays) {
-          const key = dateKey(day);
-          if (working[key].some(event => eventMatchesTask(event, task))) continue;
-          const slot = findFreeSlot(day, task.estimatedMinutes, working[key], "auto");
-          if (slot) { choice = { day, slot }; break; }
-        }
-        if (!choice) continue;
+      for (let index = 0; index < proposals.length; index += 1) {
+        const block = proposals[index];
+        setProgress(`Scheduling ${index + 1} of ${proposals.length}: ${block.task.title}`);
         await callCalendar(supabase, "createBlock", {
-          taskId: task.id, title: task.title, startsAt: choice.slot.startsAt, endsAt: choice.slot.endsAt,
+          taskId: block.task.id, title: block.task.title, startsAt: block.startsAt, endsAt: block.endsAt,
           calendarId: status.selected_calendar_id, timeZone: "Europe/London",
         });
-        await assignTaskToDay(supabase, user.id, task.id, choice.day);
-        working[dateKey(choice.day)].push({ id: `local-${task.id}`, title: `Focus: ${task.title}`, start: choice.slot.startsAt, end: choice.slot.endsAt, allDay: false, status: "confirmed", editable: true, managed: true, taskId: task.id });
-        scheduled += 1;
+        await assignTaskToDay(supabase, user.id, block.task.id, block.day);
       }
-      setMessage(`Scheduled ${scheduled} task${scheduled === 1 ? "" : "s"}${scheduled < candidates.length ? `; ${candidates.length - scheduled} still need capacity` : ""}.`);
+      setMessage(`Added ${proposals.length} reviewed task${proposals.length === 1 ? "" : "s"} to Calendar.`);
+      setProposals([]);
       await reloadWorkspace();
       await loadEvents();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to apply the plan.");
-    } finally { setBusy(false); }
+      setError(reason instanceof Error ? reason.message : "Unable to apply the reviewed plan.");
+    } finally { setBusy(false); setProgress(""); }
+  }
+
+  async function deleteOneEvent(event: GoogleCalendarEvent) {
+    if (!supabase || !user || !status?.selected_calendar_id || event.editable === false || event.allDay) return;
+    if (!window.confirm(`Delete “${event.title}” from Google Calendar?`)) return;
+    setBusy(true); setProgress(`Deleting “${event.title}”…`); setError("");
+    try {
+      await callCalendar(supabase, "deleteEvent", { eventId: event.id, blockId: event.blockId, calendarId: status.selected_calendar_id });
+      if (event.taskId) await assignTaskToDay(supabase, user.id, event.taskId, null);
+      setMessage(`Deleted “${event.title}”.`);
+      await reloadWorkspace();
+      await loadEvents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete the event.");
+    } finally { setBusy(false); setProgress(""); }
+  }
+
+  async function deleteSelectedEvents() {
+    if (!supabase || !user || !status?.selected_calendar_id || !selectedEventIds.size) return;
+    const selected = visibleEvents.filter(event => selectedEventIds.has(event.id) && event.editable !== false && !event.allDay);
+    if (!selected.length || !window.confirm(`Delete ${selected.length} selected Calendar event${selected.length === 1 ? "" : "s"}? Linked tasks will return to the backlog.`)) return;
+    setBusy(true); setError("");
+    try {
+      for (let index = 0; index < selected.length; index += 1) {
+        const event = selected[index];
+        setProgress(`Deleting ${index + 1} of ${selected.length}: ${event.title}`);
+        await callCalendar(supabase, "deleteEvent", { eventId: event.id, blockId: event.blockId, calendarId: status.selected_calendar_id });
+        if (event.taskId) await assignTaskToDay(supabase, user.id, event.taskId, null);
+      }
+      setMessage(`Deleted ${selected.length} event${selected.length === 1 ? "" : "s"}.`);
+      setSelectedEventIds(new Set());
+      setSelectionMode(false);
+      await reloadWorkspace();
+      await loadEvents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete all selected events.");
+    } finally { setBusy(false); setProgress(""); }
+  }
+
+  function toggleSelectedEvent(id: string) {
+    setSelectedEventIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
   function shift(offset: number) {
@@ -237,12 +309,21 @@ export default function UnifiedCalendarPage() {
       <div><span>CALENDAR PLANNER</span><h1>Your Google Calendar, plus your work.</h1><p>Manage commitments, schedule tasks and protect capacity from one place.</p></div>
       <div className={styles.toolbar}>
         <div className={styles.viewToggle}><button className={view === "week" ? styles.activeToggle : ""} onClick={() => setView("week")}>Week</button><button className={view === "day" ? styles.activeToggle : ""} onClick={() => { setView("day"); setSelectedDate(localDateInput(anchor)); }}>Day</button></div>
-        <button onClick={() => void autoPlan(view === "week" ? days : visibleDays)} disabled={busy || calendarLoading || !calendarConnected}><Sparkles size={17} /> {view === "week" ? "Schedule my week" : "Plan this day"}</button>
+        <button onClick={() => buildPlan(view === "week" ? days : visibleDays)} disabled={busy || calendarLoading || !calendarConnected}><Sparkles size={17} /> {view === "week" ? "Propose my week" : "Propose this day"}</button>
+        <button className={styles.secondaryToolbar} onClick={() => { setSelectionMode(current => !current); setSelectedEventIds(new Set()); }} disabled={busy}>{selectionMode ? "Cancel selection" : "Select events"}</button>
+        {selectionMode && <button className={styles.deleteToolbar} onClick={() => void deleteSelectedEvents()} disabled={busy || !selectedEventIds.size}><Trash2 size={16} /> Delete selected ({selectedEventIds.size})</button>}
       </div>
     </header>
 
+    {progress && <div className={styles.progress}><Clock3 size={17} /> {progress}</div>}
     {error && <div className={styles.error}>{error}</div>}
     {message && <div className={styles.success}><CheckCircle2 size={17} /> {message}</div>}
+
+    {proposals.length > 0 && <section className={styles.proposalPanel}>
+      <div><span>PROPOSED PLAN</span><h2>Nothing has been added yet</h2><p>Command Centre has capped this plan at {view === "week" ? MAX_WEEKLY_PROPOSALS : 3} tasks and no more than {MAX_PER_INITIATIVE} from one initiative.</p></div>
+      <div className={styles.proposalList}>{proposals.map(block => <article key={block.task.id}><div><strong>{block.task.title}</strong><small>{initiativeTitle(block.task)}</small></div><time>{block.day.toLocaleDateString("en-GB", { weekday: "short" })} {timeLabel(block.startsAt)}–{timeLabel(block.endsAt)}</time><button onClick={() => setProposals(current => current.filter(item => item.task.id !== block.task.id))}><X size={15} /></button></article>)}</div>
+      <div className={styles.proposalActions}><button onClick={() => setProposals([])} disabled={busy}>Cancel</button><button onClick={() => void applyPlan()} disabled={busy}>Add {proposals.length} to Calendar</button></div>
+    </section>}
 
     {loading ? <section className={styles.loading}>Loading your planner…</section> : !calendarConnected ? <section className={styles.connectCard}><CalendarDays size={34} /><h2>Connect Google Calendar</h2><p>The unified planner needs Calendar access to display and manage your schedule.</p><button onClick={connectGoogle} disabled={busy}><Link2 size={17} /> Connect Google Calendar</button></section> : <>
       <section className={styles.rangeBar}>
@@ -255,7 +336,7 @@ export default function UnifiedCalendarPage() {
         <aside className={styles.backlog}>
           <div><span>UNSCHEDULED TASKS</span><h2>Waiting for time</h2><p>{backlog.length} task{backlog.length === 1 ? "" : "s"}</p></div>
           <label><Search size={16} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks" /></label>
-          <div className={styles.taskList}>{backlog.map(task => <article key={task.id}><strong>{task.title}</strong><small>{initiativeTitle(task)} · {task.estimatedMinutes} min · priority {task.priority}</small><div>{visibleDays.map(day => <span key={dateKey(day)}><b>{day.toLocaleDateString("en-GB", { weekday: "short" })}</b><button onClick={() => void scheduleTask(task, day, "morning")} disabled={busy}>AM</button><button onClick={() => void scheduleTask(task, day, "afternoon")} disabled={busy}>PM</button></span>)}</div></article>)}{backlog.length === 0 && <p className={styles.empty}>No matching unscheduled tasks.</p>}</div>
+          <div className={styles.taskList}>{backlog.map(task => <article key={task.id}><strong>{task.title}</strong><small>{initiativeTitle(task)} · {task.estimatedMinutes} min · priority {task.priority}{task.dueOn ? ` · due ${task.dueOn}` : ""}</small><div>{visibleDays.map(day => <span key={dateKey(day)}><b>{day.toLocaleDateString("en-GB", { weekday: "short" })}</b><button onClick={() => void scheduleTask(task, day, "morning")} disabled={busy}>AM</button><button onClick={() => void scheduleTask(task, day, "afternoon")} disabled={busy}>PM</button></span>)}</div></article>)}{backlog.length === 0 && <p className={styles.empty}>No matching unscheduled tasks.</p>}</div>
         </aside>
 
         <div className={`${styles.calendarBoard} ${view === "day" ? styles.dayBoard : ""}`}>
@@ -270,7 +351,11 @@ export default function UnifiedCalendarPage() {
               <header><div><span>{day.toLocaleDateString("en-GB", { weekday: "long" })}</span><strong>{day.getDate()}</strong></div><small><Clock3 size={14} /> {Math.round(remaining / 15) / 4}h free</small></header>
               <div className={styles.capacity}><div><b>{Math.round(externalMinutes / 15) / 4}h commitments</b><b>{Math.round(commandMinutes / 15) / 4}h Command Centre</b></div><span>{Math.round(remaining / 15) / 4}h genuinely free</span></div>
               <div className={styles.timeline}>
-                {events.map(event => <button key={event.id} className={event.managed ? styles.managedEvent : styles.googleEvent} onClick={() => setSelectedEvent(event)}><time>{event.allDay ? "All day" : `${timeLabel(event.start)}–${timeLabel(event.end)}`}</time><strong>{event.title}</strong><small>{event.managed ? "Command Centre" : "Google Calendar"}{event.editable === false ? " · view only" : ""}</small></button>)}
+                {events.map(event => <div key={event.id} className={`${styles.eventRow} ${event.managed ? styles.managedEvent : styles.googleEvent}`}>
+                  {selectionMode && event.editable !== false && !event.allDay && <input type="checkbox" checked={selectedEventIds.has(event.id)} onChange={() => toggleSelectedEvent(event.id)} aria-label={`Select ${event.title}`} />}
+                  <button className={styles.eventMain} onClick={() => selectionMode ? toggleSelectedEvent(event.id) : setSelectedEvent(event)}><time>{event.allDay ? "All day" : `${timeLabel(event.start)}–${timeLabel(event.end)}`}</time><strong>{event.title}</strong><small>{event.managed ? "Command Centre" : "Google Calendar"}{event.editable === false ? " · view only" : ""}</small></button>
+                  {!selectionMode && event.editable !== false && !event.allDay && <button className={styles.quickDelete} onClick={() => void deleteOneEvent(event)} title="Delete event"><Trash2 size={14} /></button>}
+                </div>)}
                 {datedTasks.map(task => <article className={styles.unscheduledCard} key={task.id}><strong>{task.title}</strong><small>Task dated for this day, not yet in Calendar</small><button onClick={() => void scheduleTask(task, day, "auto")} disabled={busy}>Find a time</button></article>)}
                 {!events.length && !datedTasks.length && <div className={styles.emptyDay}><CalendarDays size={20} /> No events or tasks</div>}
               </div>
