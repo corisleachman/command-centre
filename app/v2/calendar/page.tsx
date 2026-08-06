@@ -1,591 +1,331 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  CalendarDays,
-  CheckCircle2,
-  Clock3,
-  Link2,
-  Plus,
-  RefreshCcw,
-  ShieldCheck,
-  Sparkles,
-  Target,
-  Trash2,
+  CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock3, ExternalLink,
+  Link2, Pencil, Search, Sparkles, Trash2, X,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../../../lib/supabase";
-import { loadV2Workspace, type V2Workspace } from "../../../lib/v2-data";
+import { loadV2Workspace, type V2Task, type V2Workspace } from "../../../lib/v2-data";
 import {
-  callCalendar,
-  combineLocalDateTime,
-  loadCalendarStatus,
-  localDateInput,
-  type CalendarConnectionStatus,
-  type GoogleCalendarEvent,
-  type GoogleCalendarOption,
+  callCalendar, loadCalendarStatus, localDateInput,
+  type CalendarConnectionStatus, type GoogleCalendarEvent,
 } from "../../../lib/v2-calendar";
-import {
-  ensureDefaultRevenueRoutine,
-  loadCalendarRoutines,
-  type CalendarRoutine,
-} from "../../../lib/v2-calendar-routines";
-import {
-  findAvailableWindows,
-  proposeWholeDayPlan,
-  type ProposedCalendarBlock,
-} from "../../../lib/v2-calendar-planner";
+import { assignTaskToDay, dateKey, tasksForDay, weekDays } from "../../../lib/v2-week-planner";
 import styles from "./calendar.module.css";
 
-const emptyWorkspace: V2Workspace = {
-  initiatives: [],
-  unassignedTasks: [],
-  todayTasks: [],
-  allTasks: [],
-};
+const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
+const WORKDAY_START = 9 * 60;
+const WORKDAY_END = 17 * 60 + 30;
+type ViewMode = "week" | "day";
+type DayPart = "morning" | "afternoon" | "auto";
+type WeekEvents = Record<string, GoogleCalendarEvent[]>;
 
-export default function CalendarPage() {
+function minutesSinceMidnight(value: string) {
+  const date = new Date(value);
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function isoAt(day: Date, minutes: number) {
+  const value = new Date(day);
+  value.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+  return value.toISOString();
+}
+
+function timeLabel(value: string) {
+  return new Date(value).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+function durationMinutes(event: GoogleCalendarEvent) {
+  return Math.max(0, Math.round((new Date(event.end).getTime() - new Date(event.start).getTime()) / 60_000));
+}
+
+function findFreeSlot(day: Date, minutes: number, events: GoogleCalendarEvent[], part: DayPart) {
+  const rangeStart = part === "afternoon" ? 13 * 60 : WORKDAY_START;
+  const rangeEnd = part === "morning" ? 13 * 60 : WORKDAY_END;
+  const busy = events
+    .filter(event => !event.allDay && event.status !== "cancelled")
+    .map(event => ({ start: minutesSinceMidnight(event.start), end: minutesSinceMidnight(event.end) }))
+    .sort((a, b) => a.start - b.start);
+  for (let cursor = rangeStart; cursor + minutes <= rangeEnd; cursor += 15) {
+    const end = cursor + minutes;
+    if (!busy.some(event => cursor < event.end && end > event.start)) {
+      return { startsAt: isoAt(day, cursor), endsAt: isoAt(day, end) };
+    }
+  }
+  return null;
+}
+
+function eventMatchesTask(event: GoogleCalendarEvent, task: V2Task) {
+  if (event.taskId === task.id) return true;
+  const clean = event.title.replace(/^Focus:\s*/i, "").trim().toLowerCase();
+  return clean === task.title.trim().toLowerCase();
+}
+
+export default function UnifiedCalendarPage() {
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspace] = useState(emptyWorkspace);
   const [status, setStatus] = useState<CalendarConnectionStatus | null>(null);
-  const [routines, setRoutines] = useState<CalendarRoutine[]>([]);
-  const [calendars, setCalendars] = useState<GoogleCalendarOption[]>([]);
-  const [events, setEvents] = useState<GoogleCalendarEvent[]>([]);
-  const [loadedDate, setLoadedDate] = useState("");
-  const [date, setDate] = useState(localDateInput());
-  const [startTime, setStartTime] = useState("09:30");
-  const [duration, setDuration] = useState(60);
-  const [taskId, setTaskId] = useState("");
-  const [workdayStart, setWorkdayStart] = useState("09:00");
-  const [workdayEnd, setWorkdayEnd] = useState("17:30");
-  const [proposals, setProposals] = useState<ProposedCalendarBlock[]>([]);
+  const [eventsByDay, setEventsByDay] = useState<WeekEvents>({});
+  const [anchor, setAnchor] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(localDateInput());
+  const [view, setView] = useState<ViewMode>("week");
+  const [query, setQuery] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState<GoogleCalendarEvent | null>(null);
   const [loading, setLoading] = useState(true);
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const eventRequestId = useRef(0);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    if (!supabase) {
-      setError("Supabase is not configured.");
-      setLoading(false);
-      return;
-    }
-
-    supabase.auth.getSession().then(async ({ data }) => {
-      const session = data.session;
-      setUser(session?.user ?? null);
-      if (!session?.user) {
-        setLoading(false);
-        return;
-      }
-
-      try {
-        if (session.provider_refresh_token) {
-          await callCalendar(supabase, "connect", {
-            refreshToken: session.provider_refresh_token,
-            accessToken: session.provider_token,
-            expiresAt: session.expires_at
-              ? new Date(session.expires_at * 1000).toISOString()
-              : null,
-            scopes: [
-              "https://www.googleapis.com/auth/calendar.events",
-              "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-            ],
-          });
-        }
-
-        await ensureDefaultRevenueRoutine(supabase, session.user.id);
-        const [calendarStatus, nextWorkspace, nextRoutines] = await Promise.all([
-          loadCalendarStatus(supabase, session.user.id),
-          loadV2Workspace(supabase, session.user.id),
-          loadCalendarRoutines(supabase, session.user.id),
-        ]);
-
-        setStatus(calendarStatus);
-        setWorkspace(nextWorkspace);
-        setRoutines(nextRoutines);
-        setTaskId(
-          nextWorkspace.todayTasks[0]?.id ??
-            nextWorkspace.allTasks.find((task) => task.status !== "complete")?.id ??
-            "",
-        );
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Unable to load Calendar.");
-      } finally {
-        setLoading(false);
-      }
+    if (!supabase) { setError("Supabase is not configured."); setLoading(false); return; }
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (sessionError) setError(sessionError.message);
+      setUser(data.session?.user ?? null);
+      if (!data.session?.user) setLoading(false);
     });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => listener.subscription.unsubscribe();
   }, []);
 
+  async function reloadWorkspace() {
+    if (!supabase || !user) return;
+    setLoading(true);
+    try {
+      const [nextWorkspace, nextStatus] = await Promise.all([
+        loadV2Workspace(supabase, user.id),
+        loadCalendarStatus(supabase, user.id),
+      ]);
+      setWorkspace(nextWorkspace);
+      setStatus(nextStatus);
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load the planner.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { if (user) void reloadWorkspace(); }, [user]);
+
+  const days = useMemo(() => weekDays(anchor), [anchor]);
+  const visibleDays = view === "day"
+    ? days.filter(day => dateKey(day) === selectedDate).length ? days.filter(day => dateKey(day) === selectedDate) : [new Date(`${selectedDate}T12:00:00`)]
+    : days;
+  const weekKeys = useMemo(() => new Set(days.map(dateKey)), [days]);
+  const activeTasks = workspace.allTasks.filter(task => task.status !== "complete" && task.status !== "cancelled");
+  const backlog = activeTasks
+    .filter(task => !task.dueOn || !weekKeys.has(task.dueOn))
+    .filter(task => task.title.toLowerCase().includes(query.toLowerCase()));
+  const calendarConnected = status?.status === "connected" && Boolean(status.selected_calendar_id);
+  const initiativeTitle = (task: V2Task) => workspace.initiatives.find(item => item.id === task.initiativeId)?.title ?? "Unassigned";
+
+  async function loadEvents() {
+    if (!supabase || !status?.selected_calendar_id) { setEventsByDay({}); return; }
+    setCalendarLoading(true);
+    setError("");
+    try {
+      const targets = view === "day" ? visibleDays : days;
+      const pairs = await Promise.all(targets.map(async day => {
+        const key = dateKey(day);
+        const result = await callCalendar<{ events: GoogleCalendarEvent[] }>(supabase, "events", {
+          calendarId: status.selected_calendar_id,
+          timeMin: new Date(`${key}T00:00:00`).toISOString(),
+          timeMax: new Date(`${key}T23:59:59`).toISOString(),
+        });
+        return [key, result.events] as const;
+      }));
+      setEventsByDay(current => view === "day" ? { ...current, ...Object.fromEntries(pairs) } : Object.fromEntries(pairs));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to read Google Calendar.");
+    } finally {
+      setCalendarLoading(false);
+    }
+  }
+
   useEffect(() => {
-    const calendarId = status?.selected_calendar_id;
-    if (loading || !calendarId) return;
-
-    setEvents([]);
-    setLoadedDate("");
-    setProposals([]);
-    void loadDay(calendarId, date);
-  }, [date, loading, status?.selected_calendar_id]);
-
-  const activeTasks = useMemo(
-    () =>
-      workspace.allTasks.filter(
-        (task) => task.status !== "complete" && task.status !== "cancelled",
-      ),
-    [workspace.allTasks],
-  );
-  const selectedTask = activeTasks.find((task) => task.id === taskId) ?? null;
-  const plannedMinutes = proposals.reduce((total, block) => total + block.minutes, 0);
+    if (!loading && calendarConnected) void loadEvents();
+    if (!calendarConnected) setEventsByDay({});
+  }, [loading, status?.selected_calendar_id, anchor, selectedDate, view]);
 
   async function connectGoogle() {
     if (!supabase) return;
     setBusy(true);
-    setError("");
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/v2/calendar/`,
-        scopes:
-          "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-        queryParams: {
-          access_type: "offline",
-          prompt: "consent",
-          include_granted_scopes: "true",
-        },
+        scopes: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+        queryParams: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" },
       },
     });
-    if (authError) {
-      setError(authError.message);
-      setBusy(false);
-    }
+    if (authError) { setError(authError.message); setBusy(false); }
   }
 
-  async function loadCalendars() {
-    if (!supabase) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await callCalendar<{ calendars: GoogleCalendarOption[] }>(
-        supabase,
-        "calendars",
-      );
-      setCalendars(result.calendars);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load calendars.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function chooseCalendar(calendar: GoogleCalendarOption) {
-    if (!supabase) return;
-    setBusy(true);
-    setError("");
-    try {
-      await callCalendar(supabase, "selectCalendar", {
-        calendarId: calendar.id,
-        calendarName: calendar.name,
-      });
-      setStatus((current) =>
-        current
-          ? {
-              ...current,
-              selected_calendar_id: calendar.id,
-              selected_calendar_name: calendar.name,
-            }
-          : current,
-      );
-      setMessage(`${calendar.name} is now the managed calendar.`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to select calendar.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadDay(
-    calendarId = status?.selected_calendar_id,
-    targetDate = date,
-  ) {
-    if (!supabase || !calendarId) return;
-    const requestId = ++eventRequestId.current;
-    setBusy(true);
-    setError("");
-    setProposals([]);
-
-    try {
-      const from = new Date(`${targetDate}T00:00:00`).toISOString();
-      const to = new Date(`${targetDate}T23:59:59`).toISOString();
-      const result = await callCalendar<{ events: GoogleCalendarEvent[] }>(
-        supabase,
-        "events",
-        { calendarId, timeMin: from, timeMax: to },
-      );
-
-      if (requestId === eventRequestId.current) {
-        setEvents(result.events);
-        setLoadedDate(targetDate);
-      }
-    } catch (reason) {
-      if (requestId === eventRequestId.current) {
-        setEvents([]);
-        setLoadedDate(targetDate);
-        setError(reason instanceof Error ? reason.message : "Unable to load the day.");
-      }
-    } finally {
-      if (requestId === eventRequestId.current) setBusy(false);
-    }
-  }
-
-  async function createBlock() {
-    if (!supabase || !selectedTask || !status?.selected_calendar_id) return;
-    setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const startsAt = combineLocalDateTime(date, startTime);
-      const endsAt = new Date(
-        new Date(startsAt).getTime() + duration * 60_000,
-      ).toISOString();
-      await callCalendar(supabase, "createBlock", {
-        taskId: selectedTask.id,
-        title: selectedTask.title,
-        startsAt,
-        endsAt,
-        calendarId: status.selected_calendar_id,
-        timeZone: "Europe/London",
-      });
-      setMessage(`Blocked ${duration} minutes for “${selectedTask.title}”.`);
-      await loadDay(status.selected_calendar_id, date);
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to create the time block.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function buildPlan(mode: "whole-day" | "revenue") {
-    setError("");
-    setMessage("");
-
-    if (loadedDate !== date) {
-      setError("The selected day is still loading. Try again in a moment.");
+  async function scheduleTask(task: V2Task, day: Date, part: DayPart = "auto") {
+    if (!supabase || !user || !status?.selected_calendar_id) return;
+    const key = dateKey(day);
+    const existing = eventsByDay[key] ?? [];
+    if (existing.some(event => eventMatchesTask(event, task))) {
+      setError(`“${task.title}” is already in the Calendar on ${day.toLocaleDateString("en-GB", { weekday: "long" })}.`);
       return;
     }
-
-    const windows = findAvailableWindows(
-      date,
-      events,
-      workdayStart,
-      workdayEnd,
-    );
-    const candidates = workspace.todayTasks.length
-      ? [
-          ...workspace.todayTasks,
-          ...activeTasks.filter(
-            (task) => !workspace.todayTasks.some((today) => today.id === task.id),
-          ),
-        ]
-      : activeTasks;
-    const selectedRoutines =
-      mode === "revenue"
-        ? routines.filter((routine) => routine.category === "income")
-        : routines;
-    let next = proposeWholeDayPlan(
-      candidates,
-      selectedRoutines,
-      windows,
-      date,
-      mode === "revenue" ? 1 : 10,
-    );
-    if (mode === "revenue") {
-      next = next.filter((block) => block.source === "routine").slice(0, 1);
-    }
-    setProposals(next);
-    if (!next.length) {
-      setError("No suitable free windows were found. Widen the working hours or choose another day.");
-    }
-  }
-
-  function removeProposal(id: string) {
-    setProposals((current) => current.filter((block) => block.id !== id));
-  }
-
-  async function applyPlan() {
-    if (!supabase || !status?.selected_calendar_id || !proposals.length) return;
-    setBusy(true);
-    setError("");
-    setMessage("");
+    const slot = findFreeSlot(day, task.estimatedMinutes, existing, part);
+    if (!slot) { setError(`No suitable ${part === "auto" ? "" : `${part} `}slot is available.`); return; }
+    setBusy(true); setError(""); setMessage("");
     try {
-      for (const block of proposals) {
-        await callCalendar(supabase, "createBlock", {
-          taskId: block.taskId,
-          title: block.title,
-          startsAt: block.startsAt,
-          endsAt: block.endsAt,
-          calendarId: status.selected_calendar_id,
-          timeZone: "Europe/London",
-        });
-      }
-      setMessage(
-        `Added ${proposals.length} protected block${
-          proposals.length === 1 ? "" : "s"
-        }, totalling ${plannedMinutes} minutes.`,
-      );
-      setProposals([]);
-      await loadDay(status.selected_calendar_id, date);
+      await callCalendar(supabase, "createBlock", {
+        taskId: task.id, title: task.title, startsAt: slot.startsAt, endsAt: slot.endsAt,
+        calendarId: status.selected_calendar_id, timeZone: "Europe/London",
+      });
+      await assignTaskToDay(supabase, user.id, task.id, day);
+      setMessage(`Scheduled “${task.title}” on ${day.toLocaleDateString("en-GB", { weekday: "long" })} at ${timeLabel(slot.startsAt)}.`);
+      await reloadWorkspace();
+      await loadEvents();
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to apply the proposed plan.",
-      );
-    } finally {
-      setBusy(false);
-    }
+      setError(reason instanceof Error ? reason.message : "Unable to schedule the task.");
+    } finally { setBusy(false); }
   }
 
-  if (!user && !loading) {
-    return (
-      <main className={styles.state}>
-        <div>
-          <h1>Sign in first</h1>
-          <Link href="/v2">Back to V2</Link>
-        </div>
-      </main>
-    );
+  async function autoPlan(targetDays: Date[]) {
+    if (!supabase || !user || !status?.selected_calendar_id) return;
+    const candidates = [...backlog].sort((a, b) => b.priority - a.priority || a.position - b.position);
+    if (!candidates.length) { setMessage("There are no unscheduled tasks to place."); return; }
+    setBusy(true); setError(""); setMessage("");
+    const working: WeekEvents = Object.fromEntries(targetDays.map(day => [dateKey(day), [...(eventsByDay[dateKey(day)] ?? [])]]));
+    let scheduled = 0;
+    try {
+      for (const task of candidates) {
+        let choice: { day: Date; slot: { startsAt: string; endsAt: string } } | null = null;
+        for (const day of targetDays) {
+          const key = dateKey(day);
+          if (working[key].some(event => eventMatchesTask(event, task))) continue;
+          const slot = findFreeSlot(day, task.estimatedMinutes, working[key], "auto");
+          if (slot) { choice = { day, slot }; break; }
+        }
+        if (!choice) continue;
+        await callCalendar(supabase, "createBlock", {
+          taskId: task.id, title: task.title, startsAt: choice.slot.startsAt, endsAt: choice.slot.endsAt,
+          calendarId: status.selected_calendar_id, timeZone: "Europe/London",
+        });
+        await assignTaskToDay(supabase, user.id, task.id, choice.day);
+        working[dateKey(choice.day)].push({ id: `local-${task.id}`, title: `Focus: ${task.title}`, start: choice.slot.startsAt, end: choice.slot.endsAt, allDay: false, status: "confirmed", editable: true, managed: true, taskId: task.id });
+        scheduled += 1;
+      }
+      setMessage(`Scheduled ${scheduled} task${scheduled === 1 ? "" : "s"}${scheduled < candidates.length ? `; ${candidates.length - scheduled} still need capacity` : ""}.`);
+      await reloadWorkspace();
+      await loadEvents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to apply the plan.");
+    } finally { setBusy(false); }
   }
 
-  return (
-    <main className={styles.page}>
-      <header className={styles.hero}>
-        <div>
-          <span>GOOGLE CALENDAR</span>
-          <h1>Turn priorities into protected time</h1>
-          <p>Protect recurring priorities first, then fit practical tasks around your real commitments.</p>
+  function shift(offset: number) {
+    const next = new Date(anchor);
+    next.setDate(next.getDate() + offset * (view === "week" ? 7 : 1));
+    setAnchor(next);
+    if (view === "day") setSelectedDate(dateKey(next));
+  }
+
+  if (!user && !loading) return <main className={styles.state}><div><h1>Sign in first</h1><Link href="/v2">Back to Command Centre</Link></div></main>;
+
+  return <main className={styles.page}>
+    <header className={styles.hero}>
+      <div><span>CALENDAR PLANNER</span><h1>Your Google Calendar, plus your work.</h1><p>Manage commitments, schedule tasks and protect capacity from one place.</p></div>
+      <div className={styles.toolbar}>
+        <div className={styles.viewToggle}><button className={view === "week" ? styles.activeToggle : ""} onClick={() => setView("week")}>Week</button><button className={view === "day" ? styles.activeToggle : ""} onClick={() => { setView("day"); setSelectedDate(localDateInput(anchor)); }}>Day</button></div>
+        <button onClick={() => void autoPlan(view === "week" ? days : visibleDays)} disabled={busy || calendarLoading || !calendarConnected}><Sparkles size={17} /> {view === "week" ? "Schedule my week" : "Plan this day"}</button>
+      </div>
+    </header>
+
+    {error && <div className={styles.error}>{error}</div>}
+    {message && <div className={styles.success}><CheckCircle2 size={17} /> {message}</div>}
+
+    {loading ? <section className={styles.loading}>Loading your planner…</section> : !calendarConnected ? <section className={styles.connectCard}><CalendarDays size={34} /><h2>Connect Google Calendar</h2><p>The unified planner needs Calendar access to display and manage your schedule.</p><button onClick={connectGoogle} disabled={busy}><Link2 size={17} /> Connect Google Calendar</button></section> : <>
+      <section className={styles.rangeBar}>
+        <button onClick={() => shift(-1)}><ChevronLeft /></button>
+        <strong>{view === "week" ? `${days[0].toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${days[4].toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong>
+        <button onClick={() => shift(1)}><ChevronRight /></button>
+      </section>
+
+      <section className={styles.plannerGrid}>
+        <aside className={styles.backlog}>
+          <div><span>UNSCHEDULED TASKS</span><h2>Waiting for time</h2><p>{backlog.length} task{backlog.length === 1 ? "" : "s"}</p></div>
+          <label><Search size={16} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks" /></label>
+          <div className={styles.taskList}>{backlog.map(task => <article key={task.id}><strong>{task.title}</strong><small>{initiativeTitle(task)} · {task.estimatedMinutes} min · priority {task.priority}</small><div>{visibleDays.map(day => <span key={dateKey(day)}><b>{day.toLocaleDateString("en-GB", { weekday: "short" })}</b><button onClick={() => void scheduleTask(task, day, "morning")} disabled={busy}>AM</button><button onClick={() => void scheduleTask(task, day, "afternoon")} disabled={busy}>PM</button></span>)}</div></article>)}{backlog.length === 0 && <p className={styles.empty}>No matching unscheduled tasks.</p>}</div>
+        </aside>
+
+        <div className={`${styles.calendarBoard} ${view === "day" ? styles.dayBoard : ""}`}>
+          {visibleDays.map(day => {
+            const key = dateKey(day);
+            const events = [...(eventsByDay[key] ?? [])].filter(event => event.status !== "cancelled").sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+            const datedTasks = tasksForDay(workspace.allTasks, day).filter(task => !events.some(event => eventMatchesTask(event, task)));
+            const externalMinutes = events.filter(event => !event.managed).reduce((sum, event) => sum + durationMinutes(event), 0);
+            const commandMinutes = events.filter(event => event.managed).reduce((sum, event) => sum + durationMinutes(event), 0);
+            const remaining = Math.max(0, WORKDAY_END - WORKDAY_START - externalMinutes - commandMinutes);
+            return <section className={styles.dayColumn} key={key}>
+              <header><div><span>{day.toLocaleDateString("en-GB", { weekday: "long" })}</span><strong>{day.getDate()}</strong></div><small><Clock3 size={14} /> {Math.round(remaining / 15) / 4}h free</small></header>
+              <div className={styles.capacity}><div><b>{Math.round(externalMinutes / 15) / 4}h commitments</b><b>{Math.round(commandMinutes / 15) / 4}h Command Centre</b></div><span>{Math.round(remaining / 15) / 4}h genuinely free</span></div>
+              <div className={styles.timeline}>
+                {events.map(event => <button key={event.id} className={event.managed ? styles.managedEvent : styles.googleEvent} onClick={() => setSelectedEvent(event)}><time>{event.allDay ? "All day" : `${timeLabel(event.start)}–${timeLabel(event.end)}`}</time><strong>{event.title}</strong><small>{event.managed ? "Command Centre" : "Google Calendar"}{event.editable === false ? " · view only" : ""}</small></button>)}
+                {datedTasks.map(task => <article className={styles.unscheduledCard} key={task.id}><strong>{task.title}</strong><small>Task dated for this day, not yet in Calendar</small><button onClick={() => void scheduleTask(task, day, "auto")} disabled={busy}>Find a time</button></article>)}
+                {!events.length && !datedTasks.length && <div className={styles.emptyDay}><CalendarDays size={20} /> No events or tasks</div>}
+              </div>
+            </section>;
+          })}
         </div>
-        <div className={styles.trust}>
-          <ShieldCheck size={19} />
-          <span>Only Command Centre-created blocks can be moved or deleted.</span>
-        </div>
-      </header>
+      </section>
+    </>}
 
-      {error && <div className={styles.error}>{error}</div>}
-      {message && (
-        <div className={styles.success}>
-          <CheckCircle2 size={17} />
-          {message}
-        </div>
-      )}
+    {selectedEvent && status?.selected_calendar_id && <EventDrawer event={selectedEvent} calendarId={status.selected_calendar_id} userId={user?.id ?? ""} onClose={() => setSelectedEvent(null)} onChanged={async () => { setSelectedEvent(null); await reloadWorkspace(); await loadEvents(); }} />}
+  </main>;
+}
 
-      {loading ? (
-        <section className={styles.loading}>Loading Calendar connection…</section>
-      ) : !status || status.status !== "connected" ? (
-        <section className={styles.connectCard}>
-          <CalendarDays size={32} />
-          <h2>Connect Google Calendar</h2>
-          <p>Connect once so Command Centre can read your commitments and protect time for priority work.</p>
-          <button disabled={busy} onClick={connectGoogle}>
-            <Link2 size={17} /> Connect Google Calendar
-          </button>
-        </section>
-      ) : (
-        <div className={styles.grid}>
-          <section className={styles.panel}>
-            <div className={styles.panelHeader}>
-              <div>
-                <CalendarDays size={19} />
-                <h2>Connection</h2>
-              </div>
-              <span className={styles.connected}>Connected</span>
-            </div>
-            <dl>
-              <div>
-                <dt>Google account</dt>
-                <dd>{status.google_account_email || "Connected account"}</dd>
-              </div>
-              <div>
-                <dt>Managed calendar</dt>
-                <dd>{status.selected_calendar_name || "Not selected"}</dd>
-              </div>
-            </dl>
-            <button className={styles.secondary} disabled={busy} onClick={loadCalendars}>
-              <RefreshCcw size={16} /> {calendars.length ? "Refresh calendars" : "Choose calendar"}
-            </button>
-            {calendars.length > 0 && (
-              <div className={styles.calendarList}>
-                {calendars.map((calendar) => (
-                  <button
-                    key={calendar.id}
-                    onClick={() => chooseCalendar(calendar)}
-                    className={
-                      calendar.id === status.selected_calendar_id
-                        ? styles.selectedCalendar
-                        : ""
-                    }
-                  >
-                    <strong>{calendar.name}</strong>
-                    <span>{calendar.primary ? "Primary" : calendar.accessRole}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
+function EventDrawer({ event, calendarId, userId, onClose, onChanged }: { event: GoogleCalendarEvent; calendarId: string; userId: string; onClose: () => void; onChanged: () => Promise<void> }) {
+  const [title, setTitle] = useState(event.title);
+  const [date, setDate] = useState(localDateInput(new Date(event.start)));
+  const [startTime, setStartTime] = useState(timeLabel(event.start));
+  const [endTime, setEndTime] = useState(timeLabel(event.end));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const editable = event.editable !== false && !event.allDay;
 
-          <section className={styles.panel}>
-            <div className={styles.panelHeader}>
-              <div>
-                <Target size={19} />
-                <h2>Protected routines</h2>
-              </div>
-            </div>
-            {routines.map((routine) => (
-              <article className={styles.routine} key={routine.id}>
-                <div>
-                  <strong>{routine.title}</strong>
-                  <span>
-                    {routine.idealMinutes} min · weekdays · preferably {routine.preferredStart}–{routine.preferredEnd}
-                  </span>
-                </div>
-                <b>Priority {routine.priority}</b>
-              </article>
-            ))}
-            <p className={styles.hint}>Revenue generation is protected before ordinary tasks and can move around meetings.</p>
-          </section>
+  async function save() {
+    if (!supabase || !editable) return;
+    setBusy(true); setError("");
+    try {
+      const startsAt = new Date(`${date}T${startTime}:00`).toISOString();
+      const endsAt = new Date(`${date}T${endTime}:00`).toISOString();
+      if (new Date(endsAt) <= new Date(startsAt)) throw new Error("End time must be after start time.");
+      await callCalendar(supabase, "updateEvent", { eventId: event.id, blockId: event.blockId, calendarId, title: title.trim() || "Untitled event", startsAt, endsAt, timeZone: "Europe/London" });
+      if (event.taskId && userId) await assignTaskToDay(supabase, userId, event.taskId, new Date(`${date}T12:00:00`));
+      await onChanged();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update event."); }
+    finally { setBusy(false); }
+  }
 
-          <section className={`${styles.panel} ${styles.planPanel}`}>
-            <div className={styles.panelHeader}>
-              <div>
-                <Sparkles size={19} />
-                <h2>Plan my day</h2>
-              </div>
-            </div>
-            <p className={styles.hint}>Loads recurring priorities first, then fills the remaining capacity with Today tasks and active work. Meeting buffers apply only around real calendar events.</p>
-            <div className={styles.fields}>
-              <label>
-                Workday starts
-                <input type="time" value={workdayStart} onChange={(event) => setWorkdayStart(event.target.value)} />
-              </label>
-              <label>
-                Workday ends
-                <input type="time" value={workdayEnd} onChange={(event) => setWorkdayEnd(event.target.value)} />
-              </label>
-              <label>
-                Date
-                <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-              </label>
-            </div>
-            <div className={styles.planActions}>
-              <button disabled={busy || loadedDate !== date || !status.selected_calendar_id} onClick={() => buildPlan("whole-day")}>
-                <Sparkles size={16} /> Plan my whole day
-              </button>
-              <button className={styles.revenueButton} disabled={busy || loadedDate !== date || !status.selected_calendar_id} onClick={() => buildPlan("revenue")}>
-                <Target size={16} /> Protect 90 min revenue
-              </button>
-            </div>
-            {proposals.length > 0 && (
-              <div className={styles.proposals}>
-                <div className={styles.planSummary}>
-                  <strong>{proposals.length} blocks proposed</strong>
-                  <span>{Math.floor(plannedMinutes / 60)}h {plannedMinutes % 60}m protected</span>
-                </div>
-                {proposals.map((block) => (
-                  <article key={block.id}>
-                    <div>
-                      <strong>{block.title}</strong>
-                      <span>{block.source === "routine" ? "Protected routine" : `Priority ${block.priority}`} · {block.minutes} min</span>
-                    </div>
-                    <time>
-                      {new Date(block.startsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–{new Date(block.endsAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
-                    </time>
-                    <button aria-label={`Remove ${block.title}`} className={styles.removeButton} onClick={() => removeProposal(block.id)}>
-                      <Trash2 size={15} />
-                    </button>
-                  </article>
-                ))}
-                <button disabled={busy} onClick={applyPlan}>
-                  <CheckCircle2 size={16} /> Apply this plan
-                </button>
-              </div>
-            )}
-          </section>
+  async function remove() {
+    if (!supabase || !editable || !window.confirm(`Delete “${event.title}” from Google Calendar?`)) return;
+    setBusy(true); setError("");
+    try {
+      await callCalendar(supabase, "deleteEvent", { eventId: event.id, blockId: event.blockId, calendarId });
+      if (event.taskId && userId) await assignTaskToDay(supabase, userId, event.taskId, null);
+      await onChanged();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to delete event."); }
+    finally { setBusy(false); }
+  }
 
-          <section className={styles.panel}>
-            <div className={styles.panelHeader}>
-              <div>
-                <Clock3 size={19} />
-                <h2>Schedule one task</h2>
-              </div>
-            </div>
-            <label>
-              Task
-              <select value={taskId} onChange={(event) => setTaskId(event.target.value)}>
-                {activeTasks.map((task) => (
-                  <option key={task.id} value={task.id}>{task.title}</option>
-                ))}
-              </select>
-            </label>
-            <div className={styles.fields}>
-              <label>
-                Date
-                <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-              </label>
-              <label>
-                Start
-                <input type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} />
-              </label>
-              <label>
-                Duration
-                <select value={duration} onChange={(event) => setDuration(Number(event.target.value))}>
-                  <option value={30}>30 min</option>
-                  <option value={45}>45 min</option>
-                  <option value={60}>1 hour</option>
-                  <option value={90}>90 min</option>
-                  <option value={120}>2 hours</option>
-                </select>
-              </label>
-            </div>
-            <button disabled={busy || !selectedTask || !status.selected_calendar_id} onClick={createBlock}>
-              <Plus size={17} /> Add protected time
-            </button>
-          </section>
-
-          <section className={`${styles.panel} ${styles.dayPanel}`}>
-            <div className={styles.panelHeader}>
-              <div>
-                <CalendarDays size={19} />
-                <h2>{new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</h2>
-              </div>
-              <button className={styles.iconButton} disabled={busy || !status.selected_calendar_id} onClick={() => loadDay(status.selected_calendar_id, date)}>
-                <RefreshCcw size={16} />
-              </button>
-            </div>
-            <div className={styles.events}>
-              {loadedDate !== date ? (
-                <p className={styles.hint}>Loading events for this day…</p>
-              ) : (
-                <>
-                  {events.map((event) => (
-                    <article key={event.id}>
-                      <time>
-                        {event.allDay
-                          ? "All day"
-                          : `${new Date(event.start).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(event.end).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
-                      </time>
-                      <strong>{event.title}</strong>
-                    </article>
-                  ))}
-                  {events.length === 0 && (
-                    <p className={styles.hint}>No events in this calendar for the selected day.</p>
-                  )}
-                </>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
-    </main>
-  );
+  return <div className={styles.drawerBackdrop} onClick={onClose}><aside className={styles.drawer} onClick={click => click.stopPropagation()}>
+    <header><div><span>{event.managed ? "COMMAND CENTRE BLOCK" : "GOOGLE CALENDAR EVENT"}</span><h2>Manage event</h2></div><button onClick={onClose}><X /></button></header>
+    {error && <div className={styles.drawerError}>{error}</div>}
+    <label>Title<input value={title} onChange={change => setTitle(change.target.value)} disabled={!editable} /></label>
+    <label>Date<input type="date" value={date} onChange={change => setDate(change.target.value)} disabled={!editable} /></label>
+    <div className={styles.timeFields}><label>Starts<input type="time" value={startTime} onChange={change => setStartTime(change.target.value)} disabled={!editable} /></label><label>Ends<input type="time" value={endTime} onChange={change => setEndTime(change.target.value)} disabled={!editable} /></label></div>
+    {!editable && <p className={styles.readOnly}>This event is view only or all-day. Manage it in Google Calendar.</p>}
+    {event.taskId && <p className={styles.linkedNote}>Linked task will move with this event. Deleting the event returns the task to the backlog.</p>}
+    <div className={styles.drawerActions}>{event.htmlLink && <a href={event.htmlLink} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Open in Google</a>}<button className={styles.deleteButton} onClick={() => void remove()} disabled={busy || !editable}><Trash2 size={16} /> Delete</button><button onClick={() => void save()} disabled={busy || !editable}><Pencil size={16} /> Save changes</button></div>
+  </aside></div>;
 }
