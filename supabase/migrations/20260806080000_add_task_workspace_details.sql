@@ -37,6 +37,11 @@ alter table public.task_subtasks enable row level security;
 alter table public.task_entries enable row level security;
 alter table public.task_activity enable row level security;
 
+drop policy if exists "Users manage own task subtasks" on public.task_subtasks;
 create policy "Users manage own task subtasks" on public.task_subtasks for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "Users manage own task entries" on public.task_entries;
 create policy "Users manage own task entries" on public.task_entries for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "Users manage own task activity" on public.task_activity;
 create policy "Users manage own task activity" on public.task_activity for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
