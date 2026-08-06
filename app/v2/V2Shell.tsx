@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarDays,
-  CalendarRange,
   CheckSquare2,
   ClipboardList,
   Home,
@@ -25,14 +24,14 @@ type NavGroup = { label: string; items: NavItem[] };
 
 const groups: NavGroup[] = [
   { label: "Now", items: [{ href: "/v2", label: "Today", icon: Home, exact: true }, { href: "/v2/daily", label: "Execute", icon: CheckSquare2 }] },
-  { label: "Plan", items: [{ href: "/v2/planner", label: "Day plan", icon: CalendarDays }, { href: "/v2/week", label: "Week plan", icon: CalendarRange }, { href: "/v2/calendar", label: "Calendar", icon: CalendarDays }, { href: "/v2/review", label: "Review", icon: RefreshCcw }] },
+  { label: "Plan", items: [{ href: "/v2/planner", label: "Day plan", icon: CalendarDays }, { href: "/v2/calendar", label: "Calendar planner", icon: CalendarDays }, { href: "/v2/review", label: "Review", icon: RefreshCcw }] },
   { label: "Work", items: [{ href: "/v2/tasks", label: "Tasks", icon: ClipboardList }, { href: "/v2/initiatives", label: "Initiatives", icon: Layers3 }, { href: "/v2/objectives", label: "Objectives", icon: Target }] },
   { label: "Capture", items: [{ href: "/v2/capture", label: "Inbox", icon: Inbox }] },
 ];
 
 const mobileItems: NavItem[] = [
   { href: "/v2", label: "Today", icon: Home, exact: true },
-  { href: "/v2/week", label: "Week", icon: CalendarRange },
+  { href: "/v2/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/v2/tasks?create=1", label: "Add", icon: Plus },
   { href: "/v2/tasks", label: "Tasks", icon: ClipboardList },
 ];
