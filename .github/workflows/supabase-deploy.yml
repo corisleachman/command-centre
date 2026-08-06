@@ -38,21 +38,58 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.101.0
+
+      - name: Validate migration filenames
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for migration in supabase/migrations/*.sql; do
+            filename="$(basename "$migration")"
+            version="${filename%%_*}"
+            case "$version" in
+              20260803|20260804)
+                # Historical date-only files already committed before canonical timestamps were adopted.
+                ;;
+              *)
+                if [[ ! "$version" =~ ^[0-9]{14}$ ]]; then
+                  echo "Invalid migration filename: $filename"
+                  echo "New migrations must use a 14-digit timestamp prefix."
+                  exit 1
+                fi
+                ;;
+            esac
+          done
 
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Validate connection
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'validate' }}
+      - name: Repair orphaned legacy history entries
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These date-only versions were applied remotely by earlier files that were later renamed.
+          # Repair changes migration metadata only. It does not undo schema or application data.
+          supabase migration repair 20260805 20260806 --status reverted
+
+      - name: Show aligned migration history
         run: supabase migration list
+
+      - name: Preview pending migrations
+        if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase db push --dry-run
 
       - name: Apply pending migrations
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          supabase db push --include-all
+          supabase db push
 
       - name: Deploy Edge Functions
         if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
