@@ -19,7 +19,10 @@ type Props = {
   initiatives: V2Initiative[];
   initialTitle?: string;
   initialNotes?: string;
+  initialCategory?: string;
+  initialPriority?: number;
   sourceUrl?: string;
+  sourceLabel?: string;
   onClose: () => void;
   onCreated: (result: { taskId: string; scheduled: boolean }) => Promise<void> | void;
 };
@@ -66,11 +69,11 @@ function formatProposal(proposal: Proposal) {
   return `${start.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}, ${start.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export default function CreateTaskModal({ userId, initiatives, initialTitle = "", initialNotes = "", sourceUrl = "", onClose, onCreated }: Props) {
+export default function CreateTaskModal({ userId, initiatives, initialTitle = "", initialNotes = "", initialCategory = "build", initialPriority = 3, sourceUrl = "", sourceLabel = "Source page", onClose, onCreated }: Props) {
   const [draft, setDraft] = useState<V2TaskDraft>({
     title: initialTitle,
-    category: "build",
-    priority: 3,
+    category: initialCategory,
+    priority: initialPriority,
     estimatedMinutes: 30,
     dueOn: null,
     notes: initialNotes,
@@ -115,7 +118,7 @@ export default function CreateTaskModal({ userId, initiatives, initialTitle = ""
 
     const cleanUrl = normaliseUrl(sourceUrl);
     if (cleanUrl) {
-      const { error: linkError } = await supabase.from("task_links").insert({ user_id: userId, task_id: data.id, label: "Source page", url: cleanUrl, position: Date.now() });
+      const { error: linkError } = await supabase.from("task_links").insert({ user_id: userId, task_id: data.id, label: sourceLabel, url: cleanUrl, position: Date.now() });
       if (linkError) throw linkError;
     }
     return data.id as string;
