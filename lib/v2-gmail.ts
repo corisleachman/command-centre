@@ -53,6 +53,8 @@ export type GmailThreadResult = {
 export type GmailReplySuggestion = {
   reply: string;
   source: "ai" | "rules";
+  state?: string;
+  reason?: string;
 };
 
 export type GmailSendResult = {
@@ -61,7 +63,8 @@ export type GmailSendResult = {
 };
 
 export async function callGmail<T>(client: SupabaseClient, action: string, payload: Record<string, unknown> = {}) {
-  const { data, error } = await client.functions.invoke("gmail-api", { body: { action, ...payload } });
+  const functionName = action === "suggestReply" ? "gmail-reply-api" : "gmail-api";
+  const { data, error } = await client.functions.invoke(functionName, { body: { action, ...payload } });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
   return data as T;
