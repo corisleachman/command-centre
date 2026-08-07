@@ -21,6 +21,7 @@ type Props = {
   initialNotes?: string;
   initialCategory?: string;
   initialPriority?: number;
+  initialEstimateMinutes?: number;
   sourceUrl?: string;
   sourceLabel?: string;
   onClose: () => void;
@@ -69,12 +70,12 @@ function formatProposal(proposal: Proposal) {
   return `${start.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}, ${start.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-export default function CreateTaskModal({ userId, initiatives, initialTitle = "", initialNotes = "", initialCategory = "build", initialPriority = 3, sourceUrl = "", sourceLabel = "Source page", onClose, onCreated }: Props) {
+export default function CreateTaskModal({ userId, initiatives, initialTitle = "", initialNotes = "", initialCategory = "build", initialPriority = 3, initialEstimateMinutes = 30, sourceUrl = "", sourceLabel = "Source page", onClose, onCreated }: Props) {
   const [draft, setDraft] = useState<V2TaskDraft>({
     title: initialTitle,
     category: initialCategory,
     priority: initialPriority,
-    estimatedMinutes: 30,
+    estimatedMinutes: initialEstimateMinutes,
     dueOn: null,
     notes: initialNotes,
     initiativeId: null,
