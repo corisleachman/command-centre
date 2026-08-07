@@ -31,8 +31,11 @@ async function decrypt(value: string) {
   return new TextDecoder().decode(decrypted);
 }
 
-async function googleFetch(path: string, accessToken: string) {
-  const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+async function gmailFetch(path: string, accessToken: string, init: RequestInit = {}) {
+  const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${accessToken}`, ...(init.headers ?? {}) },
+  });
   if (!response.ok) throw new Error(`Gmail request failed (${response.status}): ${await response.text()}`);
   return response.json();
 }
@@ -44,6 +47,10 @@ function header(message: any, name: string) {
 function senderName(from: string) {
   const clean = from.replace(/<[^>]+>/g, "").replace(/^\"|\"$/g, "").trim();
   return clean || from.split("@")[0] || "sender";
+}
+
+function senderFirstName(from: string) {
+  return senderName(from).split(/\s+/)[0] || "there";
 }
 
 function actionSignal(message: any) {
@@ -77,6 +84,128 @@ function actionSignal(message: any) {
   return { score, reasons: reasons.slice(0, 3), taskTitle };
 }
 
+function decodeBase64Url(value: string) {
+  if (!value) return "";
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  try {
+    const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+function stripHtml(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"');
+}
+
+function bodyText(payload: any): string {
+  if (!payload) return "";
+  if (payload.mimeType === "text/plain" && payload.body?.data) return decodeBase64Url(payload.body.data);
+  if (Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) return decodeBase64Url(part.body.data);
+    }
+    for (const part of payload.parts) {
+      const nested = bodyText(part);
+      if (nested) return nested;
+    }
+  }
+  if (payload.mimeType === "text/html" && payload.body?.data) return stripHtml(decodeBase64Url(payload.body.data));
+  return "";
+}
+
+function trimQuoted(value: string) {
+  const lines = value.replace(/\r/g, "").split("\n");
+  const kept: string[] = [];
+  for (const line of lines) {
+    const clean = line.trim();
+    if (/^On .+wrote:$/i.test(clean)) break;
+    if (/^-{2,}\s*(Original Message|Forwarded message)/i.test(clean)) break;
+    if (/^>/.test(clean)) break;
+    kept.push(line);
+  }
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function extractEmail(value: string) {
+  return value.match(/<([^>]+)>/)?.[1]?.trim() || value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || value.trim();
+}
+
+function encodeBase64Url(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function encodedSubject(subject: string) {
+  const bytes = new TextEncoder().encode(subject);
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return `=?UTF-8?B?${btoa(binary)}?=`;
+}
+
+function ruleBasedReply(messages: Array<{ mine: boolean; from: string; body: string }>, angle = "") {
+  const incoming = [...messages].reverse().find(item => !item.mine) ?? messages[messages.length - 1];
+  const text = incoming?.body?.trim() || "";
+  const lower = text.toLowerCase();
+  const first = senderFirstName(incoming?.from || "");
+  let middle = "Thanks for getting back to me. That sounds good from my side.";
+
+  if (/\b(no|not right now|not at the moment|pass|decline|unfortunately)\b/.test(lower)) {
+    middle = "Thanks for letting me know. I appreciate you coming back to me, and no problem at all.";
+  } else if (/\b(available|availability|call|chat|meet|meeting|time works|when can)\b/.test(lower)) {
+    middle = "Thanks for getting back to me. Happy to find a time that works and keep things moving.";
+  } else if (/\b(send|share|forward|proposal|deck|cv|details|information)\b/.test(lower)) {
+    middle = "Thanks for the note. I’ll get that across and make sure you have what you need.";
+  } else if (/\b(thanks|thank you|great|sounds good|perfect|yes|absolutely)\b/.test(lower)) {
+    middle = "Thanks, that sounds good. I’m happy to take the next step from here.";
+  } else if (/\?/.test(text)) {
+    middle = "Thanks for getting back to me. I’ve picked up your question and will come back with a clear answer.";
+  }
+
+  let reply = `Hi ${first},\n\n${middle}\n\nBest,\nCoris`;
+  if (angle === "warmer") reply = `Hi ${first},\n\nReally good to hear from you. ${middle}\n\nHope all’s well your side.\n\nBest,\nCoris`;
+  if (angle === "shorter") reply = `Hi ${first},\n\n${middle}\n\nBest,\nCoris`;
+  if (angle === "direct") reply = `Hi ${first},\n\n${middle.replace("Thanks for getting back to me. ", "")}\n\nBest,\nCoris`;
+  if (angle === "formal") reply = `Hi ${first},\n\nThank you for your message. ${middle.replace(/^Thanks[^.]*\.\s*/, "")}\n\nKind regards,\nCoris Leachman`;
+  return reply;
+}
+
+async function mapThread(threadId: string, accessToken: string) {
+  const [thread, profile] = await Promise.all([
+    gmailFetch(`/users/me/threads/${encodeURIComponent(threadId)}?format=full`, accessToken),
+    gmailFetch("/users/me/profile", accessToken),
+  ]);
+  const accountEmail = String(profile.emailAddress || "").toLowerCase();
+  const messages = (thread.messages ?? []).map((message: any) => {
+    const from = header(message, "From");
+    return {
+      id: message.id,
+      threadId: message.threadId,
+      from,
+      to: header(message, "To"),
+      subject: header(message, "Subject") || "No subject",
+      date: header(message, "Date"),
+      body: trimQuoted(bodyText(message.payload) || message.snippet || ""),
+      mine: from.toLowerCase().includes(accountEmail),
+      messageId: header(message, "Message-ID"),
+      references: header(message, "References"),
+    };
+  });
+  return { accountEmail: profile.emailAddress || "", threadId, subject: messages[messages.length - 1]?.subject || "No subject", messages };
+}
+
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -104,7 +233,7 @@ Deno.serve(async request => {
     const accessToken = token.access_token as string;
 
     if (action === "profile") {
-      const profile = await googleFetch("/users/me/profile", accessToken);
+      const profile = await gmailFetch("/users/me/profile", accessToken);
       return json({ accountEmail: profile.emailAddress });
     }
 
@@ -113,10 +242,10 @@ Deno.serve(async request => {
       const query = typeof body.query === "string" && body.query.trim()
         ? body.query.trim()
         : "newer_than:14d label:inbox -category:promotions -category:social -category:forums";
-      const list = await googleFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, accessToken);
+      const list = await gmailFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, accessToken);
       const refs = list.messages ?? [];
-      const messages = await Promise.all(refs.map((ref: any) => googleFetch(`/users/me/messages/${encodeURIComponent(ref.id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, accessToken)));
-      const profile = await googleFetch("/users/me/profile", accessToken);
+      const messages = await Promise.all(refs.map((ref: any) => gmailFetch(`/users/me/messages/${encodeURIComponent(ref.id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, accessToken)));
+      const profile = await gmailFetch("/users/me/profile", accessToken);
       const mapped = messages.map((message: any) => {
         const signal = actionSignal(message);
         return {
@@ -133,9 +262,56 @@ Deno.serve(async request => {
           reasons: signal.reasons,
           suggestedTaskTitle: signal.taskTitle,
           gmailUrl: `https://mail.google.com/mail/u/0/#all/${message.threadId}`,
+          internalDate: Number(message.internalDate || 0),
         };
-      }).sort((a: any, b: any) => b.score - a.score || Number(b.internalDate || 0) - Number(a.internalDate || 0));
-      return json({ accountEmail: profile.emailAddress, messages: mapped });
+      }).sort((a: any, b: any) => b.score - a.score || b.internalDate - a.internalDate);
+      return json({ accountEmail: profile.emailAddress, messages: mapped.map(({ internalDate: _internalDate, ...item }: any) => item) });
+    }
+
+    if (action === "thread") {
+      if (!body.threadId) return json({ error: "threadId is required." }, 400);
+      return json(await mapThread(String(body.threadId), accessToken));
+    }
+
+    if (action === "suggestReply") {
+      if (!body.threadId) return json({ error: "threadId is required." }, 400);
+      const thread = await mapThread(String(body.threadId), accessToken);
+      return json({ reply: ruleBasedReply(thread.messages, String(body.angle || "")), source: "rules" });
+    }
+
+    if (action === "send") {
+      const to = String(body.to || "").trim();
+      let subject = String(body.subject || "").trim();
+      const messageBody = String(body.body || "").trim();
+      const threadId = body.threadId ? String(body.threadId) : null;
+      if (!to || !subject || !messageBody) return json({ error: "To, subject and body are required." }, 400);
+
+      let replyHeaders: string[] = [];
+      if (threadId) {
+        const thread = await mapThread(threadId, accessToken);
+        const last = thread.messages[thread.messages.length - 1];
+        if (!/^re:/i.test(subject)) subject = `Re: ${subject.replace(/^re:\s*/i, "")}`;
+        const refs = [last?.references, last?.messageId].filter(Boolean).join(" ").trim();
+        if (last?.messageId) replyHeaders.push(`In-Reply-To: ${last.messageId}`);
+        if (refs) replyHeaders.push(`References: ${refs}`);
+      }
+
+      const raw = [
+        `To: ${to}`,
+        `Subject: ${encodedSubject(subject)}`,
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: 8bit",
+        ...replyHeaders,
+        "",
+        messageBody,
+      ].join("\r\n");
+      const result = await gmailFetch("/users/me/messages/send", accessToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw: encodeBase64Url(raw), ...(threadId ? { threadId } : {}) }),
+      });
+      return json({ messageId: result.id, threadId: result.threadId ?? threadId });
     }
 
     return json({ error: "Unknown action." }, 400);
