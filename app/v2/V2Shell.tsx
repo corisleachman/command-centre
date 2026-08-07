@@ -9,6 +9,7 @@ import {
   Home,
   Inbox,
   Layers3,
+  Mail,
   Menu,
   Plus,
   RefreshCcw,
@@ -26,7 +27,7 @@ const groups: NavGroup[] = [
   { label: "Now", items: [{ href: "/v2", label: "Today", icon: Home, exact: true }, { href: "/v2/daily", label: "Execute", icon: CheckSquare2 }] },
   { label: "Plan", items: [{ href: "/v2/planner", label: "Day plan", icon: CalendarDays }, { href: "/v2/calendar", label: "Calendar planner", icon: CalendarDays }, { href: "/v2/review", label: "Review", icon: RefreshCcw }] },
   { label: "Work", items: [{ href: "/v2/tasks", label: "Tasks", icon: ClipboardList }, { href: "/v2/initiatives", label: "Initiatives", icon: Layers3 }, { href: "/v2/objectives", label: "Objectives", icon: Target }] },
-  { label: "Capture", items: [{ href: "/v2/capture", label: "Inbox", icon: Inbox }] },
+  { label: "Capture", items: [{ href: "/v2/capture", label: "Inbox", icon: Inbox }, { href: "/v2/gmail", label: "Email actions", icon: Mail }] },
 ];
 
 const mobileItems: NavItem[] = [
