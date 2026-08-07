@@ -24,6 +24,7 @@ const WORKDAY_START = 9 * 60;
 const WORKDAY_END = 17 * 60 + 30;
 const MAX_BLOCKS = 6;
 const BUFFER_MINUTES = 30;
+const BETWEEN_BLOCKS_MINUTES = 15;
 
 function initiativeFor(workspace: V2Workspace, task: V2Task): V2Initiative | null {
   return workspace.initiatives.find(item => item.id === task.initiativeId) ?? null;
@@ -107,16 +108,63 @@ function busyIntervals(events: GoogleCalendarEvent[]) {
     .sort((a, b) => a.start - b.start);
 }
 
-function freeWindows(events: GoogleCalendarEvent[]) {
+function currentPlanningMinute(today: string) {
+  const now = new Date();
+  const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (today !== localToday) return WORKDAY_START;
+  const rounded = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 15) * 15;
+  return Math.max(WORKDAY_START, Math.min(WORKDAY_END, rounded));
+}
+
+function freeWindows(events: GoogleCalendarEvent[], today: string) {
   const busy = busyIntervals(events);
   const windows: Array<{ start: number; end: number }> = [];
-  let cursor = WORKDAY_START;
+  let cursor = currentPlanningMinute(today);
   for (const item of busy) {
+    if (item.end <= cursor) continue;
     if (item.start > cursor) windows.push({ start: cursor, end: item.start });
     cursor = Math.max(cursor, item.end);
   }
   if (cursor < WORKDAY_END) windows.push({ start: cursor, end: WORKDAY_END });
   return windows;
+}
+
+function placeRecommendation(
+  recommendation: DailyRecommendation,
+  windows: Array<{ start: number; end: number }>,
+  today: string,
+): DailyPlanBlock | null {
+  const desired = Math.min(Math.max(recommendation.task.estimatedMinutes, 15), 120);
+
+  for (let index = 0; index < windows.length; index += 1) {
+    const window = windows[index];
+    const available = window.end - window.start;
+    if (available < desired) continue;
+
+    const startsAtMinute = window.start;
+    const endsAtMinute = startsAtMinute + desired;
+    const nextStart = endsAtMinute + BETWEEN_BLOCKS_MINUTES;
+
+    if (nextStart < window.end) {
+      windows[index] = { start: nextStart, end: window.end };
+    } else {
+      windows.splice(index, 1);
+    }
+
+    return {
+      id: `proposal-${recommendation.task.id}`,
+      taskId: recommendation.task.id,
+      title: recommendation.task.title,
+      startsAt: isoAt(today, startsAtMinute),
+      endsAt: isoAt(today, endsAtMinute),
+      minutes: desired,
+      reasons: recommendation.reasons,
+      initiativeTitle: recommendation.initiativeTitle,
+      category: recommendation.task.category,
+    };
+  }
+
+  return null;
 }
 
 export function proposeDailyPlan(workspace: V2Workspace, events: GoogleCalendarEvent[], today: string) {
@@ -142,7 +190,7 @@ export function proposeDailyPlan(workspace: V2Workspace, events: GoogleCalendarE
     initiativeCounts.set(key, count + 1);
     if (candidate.task.category === "cash") hasCash = true;
     if (["health", "life"].includes(candidate.task.category)) hasHealthLife = true;
-    if (picked.length >= MAX_BLOCKS) break;
+    if (picked.length >= MAX_BLOCKS * 3) break;
   }
 
   if (!hasCash) {
@@ -150,35 +198,13 @@ export function proposeDailyPlan(workspace: V2Workspace, events: GoogleCalendarE
     if (cash) picked.unshift(cash);
   }
 
-  const windows = freeWindows(events);
+  const windows = freeWindows(events, today);
   const blocks: DailyPlanBlock[] = [];
-  let windowIndex = 0;
-  let cursor = windows[0]?.start ?? WORKDAY_END;
 
-  for (const recommendation of picked.slice(0, MAX_BLOCKS)) {
-    const desired = Math.min(Math.max(recommendation.task.estimatedMinutes, 15), 120);
-    while (windowIndex < windows.length) {
-      const window = windows[windowIndex];
-      cursor = Math.max(cursor, window.start);
-      const available = window.end - cursor;
-      if (available >= desired) {
-        blocks.push({
-          id: `proposal-${recommendation.task.id}`,
-          taskId: recommendation.task.id,
-          title: recommendation.task.title,
-          startsAt: isoAt(today, cursor),
-          endsAt: isoAt(today, cursor + desired),
-          minutes: desired,
-          reasons: recommendation.reasons,
-          initiativeTitle: recommendation.initiativeTitle,
-          category: recommendation.task.category,
-        });
-        cursor += desired + 15;
-        break;
-      }
-      windowIndex += 1;
-      cursor = windows[windowIndex]?.start ?? WORKDAY_END;
-    }
+  for (const recommendation of picked) {
+    if (blocks.length >= MAX_BLOCKS) break;
+    const block = placeRecommendation(recommendation, windows, today);
+    if (block) blocks.push(block);
   }
 
   const committedMinutes = busyIntervals(events).reduce((sum, item) => sum + (item.end - item.start), 0);
