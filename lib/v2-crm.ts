@@ -21,17 +21,23 @@ export type CrmOpportunity = {
 };
 
 export async function loadCrmOpportunities(client: SupabaseClient) {
-  const { data: { session } } = await client.auth.getSession();
-  if (!session) throw new Error("Sign in to load CRM opportunities.");
-  const response = await fetch("/api/crm/opportunities", {
-    headers: { Authorization: `Bearer ${session.access_token}` },
-    cache: "no-store",
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || "Unable to load CRM opportunities.") as Error & { code?: string };
-    error.code = data.code;
+  const { data, error } = await client.functions.invoke("crm-api", { body: { action: "activeOpportunities" } });
+  if (error) {
+    const context = (error as unknown as { context?: Response }).context;
+    if (context?.status === 503) {
+      const detail = await context.clone().json().catch(() => ({}));
+      if (detail?.code === "crm_not_configured") {
+        const missing = new Error(detail.error) as Error & { code?: string };
+        missing.code = detail.code;
+        throw missing;
+      }
+    }
     throw error;
+  }
+  if (data?.error) {
+    const detail = new Error(data.error) as Error & { code?: string };
+    detail.code = data.code;
+    throw detail;
   }
   return data as { opportunities: CrmOpportunity[]; total: number };
 }
