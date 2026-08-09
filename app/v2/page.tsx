@@ -9,11 +9,9 @@ import {
   CheckCircle2,
   Clock3,
   Inbox,
-  ListTodo,
   Plus,
   Sparkles,
   Target,
-  TrendingUp,
   X,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
@@ -33,6 +31,9 @@ import {
 } from "../../lib/v2-calendar";
 import { assignTaskToDay } from "../../lib/v2-week-planner";
 import { proposeDailyPlan, type DailyPlanBlock } from "../../lib/v2-daily-intelligence";
+import { loadCrmOpportunities, type CrmOpportunity } from "../../lib/v2-crm";
+import { callGmail, GMAIL_READONLY_SCOPE, type GmailActionMessage, type GmailInboxResult } from "../../lib/v2-gmail";
+import { buildProactiveRecommendations } from "../../lib/v2-recommendations";
 import CreateTaskModal from "./components/CreateTaskModal";
 import styles from "./v2.module.css";
 
@@ -52,6 +53,9 @@ export default function V2Page() {
   const [workspace, setWorkspace] = useState<V2Workspace>(emptyWorkspace);
   const [calendarStatus, setCalendarStatus] = useState<CalendarConnectionStatus | null>(null);
   const [events, setEvents] = useState<GoogleCalendarEvent[]>([]);
+  const [crm, setCrm] = useState<CrmOpportunity[]>([]);
+  const [gmail, setGmail] = useState<GmailActionMessage[]>([]);
+  const [signalsLoading, setSignalsLoading] = useState(false);
   const [proposal, setProposal] = useState<DailyPlanBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [calendarLoading, setCalendarLoading] = useState(false);
@@ -83,6 +87,22 @@ export default function V2Page() {
     return () => { active = false; listener.subscription.unsubscribe(); };
   }, []);
 
+  async function loadExternalSignals(status: CalendarConnectionStatus | null) {
+    if (!supabase) return;
+    setSignalsLoading(true);
+    try {
+      const crmRequest = loadCrmOpportunities(supabase);
+      const gmailRequest = status?.granted_scopes?.includes(GMAIL_READONLY_SCOPE)
+        ? callGmail<GmailInboxResult>(supabase, "actionInbox", { maxResults: 25 })
+        : Promise.resolve<GmailInboxResult>({ accountEmail: "", messages: [] });
+      const [crmResult, gmailResult] = await Promise.allSettled([crmRequest, gmailRequest]);
+      setCrm(crmResult.status === "fulfilled" ? crmResult.value.opportunities : []);
+      setGmail(gmailResult.status === "fulfilled" ? gmailResult.value.messages : []);
+    } finally {
+      setSignalsLoading(false);
+    }
+  }
+
   async function reloadWorkspace() {
     if (!supabase || !user) return;
     setLoading(true);
@@ -94,6 +114,7 @@ export default function V2Page() {
       setWorkspace(nextWorkspace);
       setCalendarStatus(nextStatus);
       setError("");
+      void loadExternalSignals(nextStatus);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load Today.");
     } finally {
@@ -125,12 +146,13 @@ export default function V2Page() {
   useEffect(() => { if (!loading && calendarConnected) void loadTodayEvents(); }, [loading, calendarStatus?.selected_calendar_id]);
 
   const intelligence = useMemo(() => proposeDailyPlan(workspace, events, today), [workspace, events, today]);
+  const proactive = useMemo(() => buildProactiveRecommendations({ workspace, events, crm, gmail, today }), [workspace, events, crm, gmail, today]);
   const activeTasks = workspace.allTasks.filter(task => task.status !== "complete" && task.status !== "cancelled");
   const bigThree = workspace.todayTasks.length ? workspace.todayTasks.slice(0, 3) : intelligence.recommendations.slice(0, 3).map(item => item.task);
   const nextEvent = [...events]
     .filter(event => !event.allDay && new Date(event.end).getTime() > Date.now())
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())[0] ?? null;
-  const nextAction = intelligence.recommendations[0] ?? null;
+  const nextAction = proactive[0] ?? null;
   const revenueAction = intelligence.recommendations.find(item => item.task.category === "cash") ?? null;
   const overdueCount = activeTasks.filter(task => task.dueOn && task.dueOn < today).length;
   const inboxCount = workspace.unassignedTasks.filter(task => task.status !== "complete" && task.status !== "cancelled").length;
@@ -198,7 +220,7 @@ export default function V2Page() {
 
   return <main className={styles.todayPage}>
     <header className={styles.todayHeader}>
-      <div><span className={styles.kicker}>TODAY · {new Date(`${today}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }).toUpperCase()}</span><h1>What deserves your time today?</h1><p>Command Centre weighs priorities, deadlines, income and real Calendar capacity before recommending the day.</p></div>
+      <div><span className={styles.kicker}>TODAY · {new Date(`${today}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }).toUpperCase()}</span><h1>What deserves your time today?</h1><p>Command Centre weighs priorities, deadlines, income, Calendar, email and active commercial relationships before recommending what needs attention.</p></div>
       <div className={styles.todayHeaderActions}><button className={styles.secondaryTodayButton} onClick={() => setShowNewTask(true)}><Plus size={17} /> Add task</button><button className={styles.planTodayButton} onClick={buildProposal} disabled={loading || calendarLoading || saving || !calendarConnected}><Sparkles size={17} /> Propose my day</button></div>
     </header>
 
@@ -227,7 +249,7 @@ export default function V2Page() {
 
       <section className={styles.signalGrid}>
         <article className={styles.signalCard}><span className={styles.kicker}>NEXT EVENT</span>{nextEvent ? <><strong>{nextEvent.title}</strong><p>{timeLabel(nextEvent.start)}–{timeLabel(nextEvent.end)}</p></> : <><strong>No upcoming event</strong><p>Your remaining time is currently open.</p></>}</article>
-        <article className={styles.signalCard}><span className={styles.kicker}>NEXT RECOMMENDED ACTION</span>{nextAction ? <><strong>{nextAction.task.title}</strong><p>{nextAction.reasons.join(" · ")}</p></> : <><strong>Nothing urgent</strong><p>No active task currently outranks the rest.</p></>}</article>
+        <article className={styles.signalCard}><span className={styles.kicker}>NEXT RECOMMENDED ACTION</span>{nextAction ? <><strong>{nextAction.title}</strong><p>{nextAction.detail}</p></> : <><strong>Nothing needs escalation</strong><p>Your connected signals are not showing a higher-priority intervention.</p></>}</article>
         <article className={styles.signalCard}><span className={styles.kicker}>REVENUE ACTION</span>{revenueAction ? <><strong>{revenueAction.task.title}</strong><p>{revenueAction.reasons.join(" · ")}</p></> : <><strong>Add a revenue action</strong><p>No active cash task is available for prioritisation.</p></>}</article>
       </section>
 
@@ -239,7 +261,10 @@ export default function V2Page() {
       </section>}
 
       <section className={styles.todayLowerGrid}>
-        <article className={styles.todayMiniCard}><div className={styles.sectionHeading}><div><span className={styles.kicker}>TOP RECOMMENDATIONS</span><h2>Why these rise</h2></div><Link href="/v2/tasks">All tasks <ArrowRight size={15} /></Link></div><div className={styles.recommendationList}>{intelligence.recommendations.slice(0, 5).map(item => <div key={item.task.id}><span className={item.task.category === "cash" ? styles.revenuePill : styles.categoryPill}>{item.task.category === "cash" ? <TrendingUp size={13} /> : <ListTodo size={13} />}{item.task.category}</span><strong>{item.task.title}</strong><small>{item.reasons.join(" · ")}</small></div>)}</div></article>
+        <article className={styles.todayMiniCard}>
+          <div className={styles.sectionHeading}><div><span className={styles.kicker}>COMMAND CENTRE NOTICED</span><h2>What needs attention</h2></div><span className={styles.categoryPill}>{signalsLoading ? "Checking signals…" : `${proactive.length} ranked signals`}</span></div>
+          <div className={styles.recommendationList}>{proactive.length ? proactive.slice(0, 5).map((item, index) => <div key={item.id}><span className={item.tone === "urgent" ? styles.revenuePill : styles.categoryPill}>{index + 1} · {item.source}</span><strong>{item.title}</strong><small>{item.detail} · <Link href={item.href}>{item.actionLabel} <ArrowRight size={12} /></Link></small></div>) : <div className={styles.empty}><CheckCircle2 size={20} /><strong>Nothing needs escalation</strong><p>Tasks, Calendar, Gmail and CRM are not producing a stronger intervention right now.</p></div>}</div>
+        </article>
         <article className={styles.todayMiniCard}><div className={styles.sectionHeading}><div><span className={styles.kicker}>INBOX SUMMARY</span><h2>{inboxCount} unassigned actions</h2></div><Link href="/v2/capture">Open Inbox <ArrowRight size={15} /></Link></div><p className={styles.mutedCopy}>Today does not expose the full backlog. Capture and organise work in Inbox, then let planning surface what deserves attention.</p></article>
       </section>
     </>}
