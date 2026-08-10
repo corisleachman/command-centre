@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
@@ -49,6 +50,7 @@ function timeLabel(value: string) {
 }
 
 export default function V2Page() {
+  const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspace] = useState<V2Workspace>(emptyWorkspace);
   const [calendarStatus, setCalendarStatus] = useState<CalendarConnectionStatus | null>(null);
@@ -60,6 +62,7 @@ export default function V2Page() {
   const [loading, setLoading] = useState(true);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dismissingTaskId, setDismissingTaskId] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -122,6 +125,11 @@ export default function V2Page() {
     }
   }
 
+  async function refreshTasksOnly() {
+    if (!supabase || !user) return;
+    setWorkspace(await loadV2Workspace(supabase, user.id));
+  }
+
   useEffect(() => { if (user) void reloadWorkspace(); }, [user]);
 
   const calendarConnected = calendarStatus?.status === "connected" && Boolean(calendarStatus.selected_calendar_id);
@@ -148,24 +156,44 @@ export default function V2Page() {
   const intelligence = useMemo(() => proposeDailyPlan(workspace, events, today), [workspace, events, today]);
   const proactive = useMemo(() => buildProactiveRecommendations({ workspace, events, crm, gmail, today }), [workspace, events, crm, gmail, today]);
   const activeTasks = workspace.allTasks.filter(task => task.status !== "complete" && task.status !== "cancelled");
-  const bigThree = workspace.todayTasks.length ? workspace.todayTasks.slice(0, 3) : intelligence.recommendations.slice(0, 3).map(item => item.task);
+  const bigThree = useMemo(() => {
+    const picked: V2Task[] = [];
+    const seen = new Set<string>();
+    const add = (task: V2Task) => {
+      if (picked.length >= 3 || seen.has(task.id) || task.status === "complete" || task.status === "cancelled") return;
+      seen.add(task.id);
+      picked.push(task);
+    };
+    workspace.todayTasks.forEach(add);
+    intelligence.recommendations.forEach(item => add(item.task));
+    [...activeTasks].sort((a, b) => (b.priority - a.priority) || a.position - b.position).forEach(add);
+    return picked.slice(0, 3);
+  }, [workspace.todayTasks, intelligence.recommendations, activeTasks]);
+  const bigThreeIds = useMemo(() => new Set(bigThree.map(task => task.id)), [bigThree]);
+  const visibleProactive = useMemo(() => proactive.filter(item => !item.taskId || !bigThreeIds.has(item.taskId)), [proactive, bigThreeIds]);
   const nextEvent = [...events]
     .filter(event => !event.allDay && new Date(event.end).getTime() > Date.now())
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())[0] ?? null;
-  const nextAction = proactive[0] ?? null;
+  const nextAction = visibleProactive[0] ?? null;
   const revenueAction = intelligence.recommendations.find(item => item.task.category === "cash") ?? null;
   const overdueCount = activeTasks.filter(task => task.dueOn && task.dueOn < today).length;
   const inboxCount = workspace.unassignedTasks.filter(task => task.status !== "complete" && task.status !== "cancelled").length;
 
-  async function toggleComplete(task: V2Task) {
-    if (!supabase || !user) return;
+  async function completeBigThree(task: V2Task) {
+    if (!supabase || !user || saving) return;
     setSaving(true);
+    setDismissingTaskId(task.id);
     try {
-      await setV2TaskComplete(supabase, user.id, task, task.status !== "complete");
-      await reloadWorkspace();
+      await new Promise(resolve => window.setTimeout(resolve, 180));
+      await setV2TaskComplete(supabase, user.id, task, true);
+      await refreshTasksOnly();
+      setMessage(`Done: ${task.title}`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to update task.");
-    } finally { setSaving(false); }
+      setError(reason instanceof Error ? reason.message : "Unable to complete task.");
+    } finally {
+      setDismissingTaskId(null);
+      setSaving(false);
+    }
   }
 
   function buildProposal() {
@@ -233,8 +261,20 @@ export default function V2Page() {
     {!loading && <>
       <section className={styles.commandGrid}>
         <article className={styles.bigThreeCard}>
-          <div className={styles.cardHeading}><div><span className={styles.kicker}>BIG THREE</span><h2>Only these matter now</h2></div><span>{bigThree.length}/3</span></div>
-          <div className={styles.taskList}>{bigThree.map((task, index) => <div className={styles.taskRow} key={task.id}><button className={styles.taskNumber} onClick={() => void toggleComplete(task)} disabled={saving}>{task.status === "complete" ? <Check size={18} /> : index + 1}</button><div className={styles.taskCopy}><strong>{task.title}</strong><small>{taskMeta(task)}</small></div><Link className={styles.openTaskLink} href="/v2/tasks"><ArrowRight size={18} /></Link></div>)}{!bigThree.length && <div className={styles.empty}><CheckCircle2 /><strong>No active priority work</strong><p>Add a task or review your backlog.</p></div>}</div>
+          <div className={styles.cardHeading}><div><span className={styles.kicker}>BIG THREE</span><h2>Nothing Else Matters</h2></div><span>{bigThree.length}/3</span></div>
+          <div className={styles.taskList}>{bigThree.map((task, index) => <div
+            className={styles.taskRow}
+            key={task.id}
+            role="link"
+            tabIndex={0}
+            onClick={() => router.push(`/v2/workspace?task=${task.id}`)}
+            onKeyDown={event => { if (event.key === "Enter") router.push(`/v2/workspace?task=${task.id}`); }}
+            style={{ cursor: "pointer", animation: "bigThreeIn 220ms ease both", opacity: dismissingTaskId === task.id ? 0 : 1, transform: dismissingTaskId === task.id ? "translateY(-8px) scale(.99)" : "none", transition: "opacity 180ms ease, transform 180ms ease" }}
+          ><span className={styles.taskNumber}>{index + 1}</span><div className={styles.taskCopy}><strong>{task.title}</strong><small>{taskMeta(task)}</small></div><div style={{ display: "flex", alignItems: "center", gap: 8 }}><button
+            onClick={event => { event.stopPropagation(); void completeBigThree(task); }}
+            disabled={saving}
+            style={{ border: 0, borderRadius: 10, padding: "8px 10px", background: "#e8f5eb", color: "#27653a", font: "inherit", fontWeight: 800, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 }}
+          ><Check size={15} /> Done</button><ArrowRight size={18} className={styles.openTaskLink} /></div></div>)}{!bigThree.length && <div className={styles.empty}><CheckCircle2 /><strong>No active priority work</strong><p>Add a task or review your backlog.</p></div>}</div>
         </article>
 
         <article className={styles.daySignalCard}>
@@ -262,13 +302,15 @@ export default function V2Page() {
 
       <section className={styles.todayLowerGrid}>
         <article className={styles.todayMiniCard}>
-          <div className={styles.sectionHeading}><div><span className={styles.kicker}>COMMAND CENTRE NOTICED</span><h2>What needs attention</h2></div><span className={styles.categoryPill}>{signalsLoading ? "Checking signals…" : `${proactive.length} ranked signals`}</span></div>
-          <div className={styles.recommendationList}>{proactive.length ? proactive.slice(0, 5).map((item, index) => <div key={item.id}><span className={item.tone === "urgent" ? styles.revenuePill : styles.categoryPill}>{index + 1} · {item.source}</span><strong>{item.title}</strong><small>{item.detail} · <Link href={item.href}>{item.actionLabel} <ArrowRight size={12} /></Link></small></div>) : <div className={styles.empty}><CheckCircle2 size={20} /><strong>Nothing needs escalation</strong><p>Tasks, Calendar, Gmail and CRM are not producing a stronger intervention right now.</p></div>}</div>
+          <div className={styles.sectionHeading}><div><span className={styles.kicker}>COMMAND CENTRE NOTICED</span><h2>What needs attention</h2></div><span className={styles.categoryPill}>{signalsLoading ? "Checking signals…" : `${visibleProactive.length} ranked signals`}</span></div>
+          <p className={styles.mutedCopy}>Big Three is what to execute. This section is different: it flags exceptions, risks and decisions across tasks, Calendar, Gmail and CRM that may need intervention.</p>
+          <div className={styles.recommendationList}>{visibleProactive.length ? visibleProactive.slice(0, 5).map((item, index) => <div key={item.id}><span className={item.tone === "urgent" ? styles.revenuePill : styles.categoryPill}>{index + 1} · {item.source}</span><strong>{item.title}</strong><small>{item.detail} · <Link href={item.href}>{item.actionLabel} <ArrowRight size={12} /></Link></small></div>) : <div className={styles.empty}><CheckCircle2 size={20} /><strong>Nothing needs escalation</strong><p>Tasks, Calendar, Gmail and CRM are not producing a stronger intervention right now.</p></div>}</div>
         </article>
         <article className={styles.todayMiniCard}><div className={styles.sectionHeading}><div><span className={styles.kicker}>INBOX SUMMARY</span><h2>{inboxCount} unassigned actions</h2></div><Link href="/v2/capture">Open Inbox <ArrowRight size={15} /></Link></div><p className={styles.mutedCopy}>Today does not expose the full backlog. Capture and organise work in Inbox, then let planning surface what deserves attention.</p></article>
       </section>
     </>}
 
     {showNewTask && user && <CreateTaskModal userId={user.id} initiatives={workspace.initiatives} onClose={() => setShowNewTask(false)} onCreated={async () => { setShowNewTask(false); await reloadWorkspace(); }} />}
+    <style jsx global>{`@keyframes bigThreeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`}</style>
   </main>;
 }
