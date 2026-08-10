@@ -12,6 +12,7 @@ export type ProactiveRecommendation = {
   href: string;
   actionLabel: string;
   tone: "urgent" | "important" | "watch";
+  taskId?: string;
 };
 
 type Inputs = {
@@ -48,10 +49,11 @@ export function buildProactiveRecommendations({ workspace, events, crm, gmail, t
     .forEach(task => items.push({
       id: `overdue:${task.id}`,
       source: "task",
+      taskId: task.id,
       title: task.title,
       detail: `Overdue since ${task.dueOn}. Decide whether to do it, move it or drop it.`,
       score: 98 + task.priority,
-      href: "/v2/tasks",
+      href: `/v2/workspace?task=${task.id}`,
       actionLabel: "Open task",
       tone: "urgent",
     }));
@@ -151,17 +153,18 @@ export function buildProactiveRecommendations({ workspace, events, crm, gmail, t
     .forEach(task => items.push({
       id: `unscheduled:${task.id}`,
       source: "task",
+      taskId: task.id,
       title: `Make time for ${task.title}`,
       detail: "This is high priority and due now, but it does not have protected Calendar time.",
       score: 84 + task.priority,
-      href: "/v2/calendar",
-      actionLabel: "Schedule it",
+      href: `/v2/workspace?task=${task.id}`,
+      actionLabel: "Open task",
       tone: "important",
     }));
 
   const unique = new Map<string, ProactiveRecommendation>();
   items.sort((a, b) => b.score - a.score).forEach(item => {
-    const key = `${item.source}:${item.title.toLowerCase()}`;
+    const key = item.taskId ? `task:${item.taskId}` : `${item.source}:${item.title.toLowerCase()}`;
     if (!unique.has(key)) unique.set(key, item);
   });
   return [...unique.values()].slice(0, 6);
