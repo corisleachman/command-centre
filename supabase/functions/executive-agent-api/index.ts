@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
 const TOKEN_KEY = Deno.env.get("CALENDAR_TOKEN_ENCRYPTION_KEY")!;
-const POLICY_VERSION = "revenue-ea-v1";
+const POLICY_VERSION = "revenue-ea-v2";
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -108,6 +108,11 @@ async function loadThread(threadId: string, token: string): Promise<ExecutiveSou
   const ownEmail = String(profile.emailAddress || "").toLowerCase();
   return (thread.messages ?? []).map((message: any) => {
     const from = header(message, "From");
+    const listUnsubscribe = header(message, "List-Unsubscribe");
+    const listId = header(message, "List-ID");
+    const precedence = header(message, "Precedence").toLowerCase();
+    const autoSubmitted = header(message, "Auto-Submitted").toLowerCase();
+    const gmailLabels = Array.isArray(message.labelIds) ? message.labelIds.map(String) : [];
     return {
       id: String(message.id || ""),
       threadId: String(message.threadId || threadId),
@@ -118,6 +123,11 @@ async function loadThread(threadId: string, token: string): Promise<ExecutiveSou
       date: header(message, "Date"),
       internalDate: Number(message.internalDate || Date.parse(header(message, "Date")) || Date.now()),
       mine: from.toLowerCase().includes(ownEmail),
+      automated: Boolean(listUnsubscribe || listId)
+        || /bulk|list|junk/.test(precedence)
+        || Boolean(autoSubmitted && autoSubmitted !== "no")
+        || gmailLabels.includes("CATEGORY_PROMOTIONS"),
+      gmailLabels,
     };
   });
 }
@@ -133,6 +143,34 @@ function stableJson(value: unknown): string {
 async function hashContent(value: unknown) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stableJson(value)));
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function supersedeEarlierThreadPacks(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  threadId: string,
+  currentEventId: string,
+  now: string,
+  supersededBy: string | null = null,
+) {
+  const { data: earlierEvents, error: eventsError } = await admin
+    .from("executive_events")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("source", "gmail")
+    .eq("entity_type", "gmail_thread")
+    .eq("entity_id", threadId)
+    .neq("id", currentEventId);
+  if (eventsError) throw eventsError;
+  const earlierEventIds = (earlierEvents ?? []).map(event => event.id);
+  if (!earlierEventIds.length) return;
+  const { error: packsError } = await admin
+    .from("action_packs")
+    .update({ status: "superseded", superseded_by: supersededBy, updated_at: now })
+    .eq("user_id", userId)
+    .in("event_id", earlierEventIds)
+    .in("status", ["ready_for_review", "approved", "failed"]);
+  if (packsError) throw packsError;
 }
 
 async function persistAssessment(
@@ -209,6 +247,7 @@ async function persistAssessment(
   if (assessmentError) throw assessmentError;
 
   if (assessment.attentionLevel === "silent" || !assessment.actions.length) {
+    await supersedeEarlierThreadPacks(admin, userId, latestMessage.threadId, event.id, now);
     await admin.from("executive_events").update({ status: "ignored", processed_at: now, updated_at: now }).eq("id", event.id);
     return { eventId: event.id, assessmentId: assessmentRow.id, packId: null, assessment };
   }
@@ -232,6 +271,7 @@ async function persistAssessment(
     updated_at: now,
   }, { onConflict: "event_id,assessment_id" }).select("id").single();
   if (packError) throw packError;
+  await supersedeEarlierThreadPacks(admin, userId, latestMessage.threadId, event.id, now, pack.id);
 
   for (const action of assessment.actions) {
     const contentHash = await hashContent(action.content);

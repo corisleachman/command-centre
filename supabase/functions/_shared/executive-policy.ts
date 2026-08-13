@@ -8,6 +8,8 @@ export type ExecutiveSourceMessage = {
   date: string;
   internalDate: number;
   mine: boolean;
+  automated?: boolean;
+  gmailLabels?: string[];
 };
 
 export type ExecutiveAssessment = {
@@ -114,13 +116,24 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   const first = firstName(from);
   const organisation = organisationFromEmail(from);
   const subject = cleanSubject(latestIncoming?.subject || "the conversation");
-  const automated = /no[-_. ]?reply|newsletter|notifications?@|mailer-daemon/i.test(from) || /unsubscribe|view in browser|email preferences/i.test(lower);
+  const marketingFooterSignals = [
+    /\bsubscribe(?: here| now)?\b/i,
+    /\b(?:hire|book) us to speak|speaking engagements?\b/i,
+    /\bpartner with us\b/i,
+    /\bmanage (?:your )?(?:email )?(?:preferences|subscription)\b/i,
+    /\bprivacy policy\b/i,
+  ].filter(pattern => pattern.test(lower)).length;
+  const automated = Boolean(latestIncoming?.automated)
+    || latestIncoming?.gmailLabels?.includes("CATEGORY_PROMOTIONS") === true
+    || /no[-_. ]?reply|newsletter|notifications?@|mailer-daemon/i.test(from)
+    || /unsubscribe|view (?:this email )?in (?:your )?browser|email preferences/i.test(lower)
+    || marketingFooterSignals >= 2;
   const revenue = /\b(proposal|scope|fee|budget|contract|engagement|discovery|positioning|messaging|pipeline|new business|outreach|kick[ -]?off|onboard|get started|move forward|proceed)\b/i.test(threadText);
-  const explicitRequest = !responseAlreadySent && /\?|\b(can you|could you|would you|please|let me know|what do you need|send|share|confirm|review)\b/i.test(incomingText);
-  const positive = !responseAlreadySent && /\b(keen to (continue|move forward|proceed)|move forward|proceed|get started|sounds good|looks good|agree|happy to|exactly what|really like|incredibly helpful|yes[, .]|go ahead)\b/i.test(lower);
-  const onboardingSignal = !responseAlreadySent && /\b(get started|kick[ -]?off|onboard|what do you need from me|next steps?)\b/i.test(lower);
-  const negative = !responseAlreadySent && /\b(not proceeding|not moving forward|pass on this|decline|not right now|unfortunately|no budget|won't be able)\b/i.test(lower);
-  const positioningFocus = !responseAlreadySent && /\b(positioning|messaging|what we(?:'re| are) selling|who(?:m)? we(?:'re| are) selling|meaningfully different|proposition)\b/i.test(lower);
+  const explicitRequest = !automated && !responseAlreadySent && /\?|\b(can you|could you|would you|please|let me know|what do you need|send|share|confirm|review)\b/i.test(incomingText);
+  const positive = !automated && !responseAlreadySent && /\b(keen to (continue|move forward|proceed)|move forward|proceed|get started|sounds good|looks good|agree|happy to|exactly what|really like|incredibly helpful|yes[, .]|go ahead)\b/i.test(lower);
+  const onboardingSignal = !automated && !responseAlreadySent && /\b(get started|kick[ -]?off|onboard|what do you need from me|next steps?)\b/i.test(lower);
+  const negative = !automated && !responseAlreadySent && /\b(not proceeding|not moving forward|pass on this|decline|not right now|unfortunately|no budget|won't be able)\b/i.test(lower);
+  const positioningFocus = !automated && !responseAlreadySent && /\b(positioning|messaging|what we(?:'re| are) selling|who(?:m)? we(?:'re| are) selling|meaningfully different|proposition)\b/i.test(lower);
   const relationship = sorted.length >= 3;
 
   let score = 0;
@@ -135,9 +148,9 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   score = clamp(score, 0, 100);
 
   const confidence = automated ? .94 : onboardingSignal && revenue ? .96 : revenue && explicitRequest ? .86 : revenue ? .73 : .65;
-  const attentionLevel = score >= 80 && confidence >= .75 ? "interrupt_now" : score >= 60 ? "top_of_today" : score >= 35 ? "morning_brief" : "silent";
-  const previousState = /\bproposal|scope|recommendation|approach\b/i.test(threadText) ? "proposal_discussion" : "active_conversation";
-  const newState = responseAlreadySent ? "waiting_for_reply" : negative ? "at_risk_or_declined" : onboardingSignal && positive ? "positive_intent_pending_onboarding" : positive ? "positive_movement" : explicitRequest ? "response_required" : previousState;
+  const attentionLevel = automated ? "silent" : score >= 80 && confidence >= .75 ? "interrupt_now" : score >= 60 ? "top_of_today" : score >= 35 ? "morning_brief" : "silent";
+  const previousState = automated ? "automated_message" : /\bproposal|scope|recommendation|approach\b/i.test(threadText) ? "proposal_discussion" : "active_conversation";
+  const newState = automated ? "filtered_as_noise" : responseAlreadySent ? "waiting_for_reply" : negative ? "at_risk_or_declined" : onboardingSignal && positive ? "positive_intent_pending_onboarding" : positive ? "positive_movement" : explicitRequest ? "response_required" : previousState;
   const changes: Array<{ type: string; evidence: string }> = [];
   if (positive) changes.push({ type: "buying_signal", evidence: excerpt(latestIncoming?.body || incomingText) });
   if (onboardingSignal) changes.push({ type: "onboarding_signal", evidence: excerpt(latestIncoming?.body || incomingText) });
@@ -146,7 +159,9 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
 
   const explicitRequests = explicitRequest ? [onboardingSignal ? "Explain what is needed to get started" : "Reply to the sender's request"] : [];
   const missingFacts = onboardingSignal ? ["Confirmed fee", "Engagement length", "Preferred kickoff date"] : [];
-  const summary = responseAlreadySent
+  const summary = automated
+    ? `${contact} was identified as an automated or bulk email and filtered from review.`
+    : responseAlreadySent
     ? `You have already sent the latest message to ${contact}. There is no new change to interrupt you about.`
     : negative
     ? `${contact} has replied with a negative commercial signal. Review the reason and decide whether to close, clarify or nurture the opportunity.`
@@ -189,7 +204,7 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   if (!negative && (explicitRequest || positive)) actions.push({ type: "follow_up_schedule", title: "Prepare follow-up trigger", position: 5, content: { activate_after: "reply_sent", wait_days: 3, reason: "Preserve momentum if there is no response after the approved reply." } });
 
   return {
-    category: revenue ? "revenue_opportunity" : automated ? "noise" : "relationship_update",
+    category: automated ? "noise" : revenue ? "revenue_opportunity" : "relationship_update",
     summary,
     previousState,
     newState,
@@ -205,7 +220,7 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
     confidence,
     contactName: contact,
     organisationName: organisation,
-    title: responseAlreadySent ? `Waiting for ${contact}` : onboardingSignal ? `${contact} appears ready to get started` : negative ? `${contact} has sent a commercial risk signal` : `${contact} needs a response`,
+    title: automated ? `${contact} was filtered as automated email` : responseAlreadySent ? `Waiting for ${contact}` : onboardingSignal ? `${contact} appears ready to get started` : negative ? `${contact} has sent a commercial risk signal` : `${contact} needs a response`,
     whyNow,
     actions,
   };
