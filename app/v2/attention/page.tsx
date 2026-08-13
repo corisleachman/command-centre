@@ -23,6 +23,7 @@ import {
   approveExecutiveActionItem,
   attentionLabel,
   dismissExecutivePack,
+  executeApprovedExecutiveActionItem,
   executiveAgentUnavailable,
   loadExecutiveActionPacks,
   markExecutivePackRead,
@@ -57,8 +58,47 @@ function proposedDetails(item: ExecutiveActionItem) {
   return Object.entries(item.content).filter(([key, value]) => !ignored.has(key) && value != null && value !== "");
 }
 
+function executesOnApproval(item: ExecutiveActionItem) {
+  return ["reply_draft", "document_draft", "task_create"].includes(item.actionType);
+}
+
+function actionButtonLabel(item: ExecutiveActionItem, isBusy: boolean) {
+  if (item.executionStatus === "completed") {
+    if (item.actionType === "reply_draft") return "Email sent";
+    if (item.actionType === "document_draft") return "Document created";
+    if (item.actionType === "task_create") return "Task created";
+  }
+  const retry = item.approvalStatus === "approved" && item.executionStatus === "failed";
+  if (isBusy) {
+    if (item.actionType === "reply_draft") return "Sending…";
+    if (item.actionType === "document_draft") return "Creating document…";
+    if (item.actionType === "task_create") return "Creating task…";
+    return "Approving…";
+  }
+  if (item.actionType === "reply_draft") return retry ? "Retry approved email" : item.approvalStatus === "approved" ? "Send approved email" : "Approve and send email";
+  if (item.actionType === "document_draft") return retry ? "Retry document creation" : item.approvalStatus === "approved" ? "Create approved document" : "Approve and create document";
+  if (item.actionType === "task_create") return retry ? "Retry task creation" : item.approvalStatus === "approved" ? "Create approved task" : "Approve and create task";
+  return item.approvalStatus === "approved" ? "Approved" : "Approve proposed update";
+}
+
+function approvalBoundary(item: ExecutiveActionItem) {
+  if (item.executionStatus === "completed") return "The approved version has been completed and recorded.";
+  if (item.actionType === "reply_draft") return "Nothing will be sent until you approve this exact version.";
+  if (item.actionType === "document_draft") return "No Google Drive file exists until you approve its creation.";
+  if (item.actionType === "task_create") return "No task will be created until you approve it.";
+  return "Approval records your decision. Execution for this action is not enabled yet.";
+}
+
+function resultLink(item: ExecutiveActionItem) {
+  if (!item.externalResultReference) return null;
+  if (item.actionType === "document_draft" && item.externalResultReference.startsWith("http")) return { href: item.externalResultReference, label: "Open document", external: true };
+  if (item.actionType === "task_create" && item.externalResultReference.startsWith("task:")) return { href: "/v2/tasks", label: "Open tasks", external: false };
+  return null;
+}
+
 function isActivePack(pack: ExecutiveActionPack) {
-  return ["ready_for_review", "executing", "failed"].includes(pack.status);
+  if (["ready_for_review", "executing", "failed"].includes(pack.status)) return true;
+  return pack.status === "approved" && pack.items.some(item => executesOnApproval(item) && item.executionStatus !== "completed");
 }
 
 export default function AttentionCentrePage() {
@@ -142,23 +182,40 @@ export default function AttentionCentrePage() {
     } catch { /* Reading an item must not block review. */ }
   }
 
-  async function approve(item: ExecutiveActionItem) {
+  async function approveAndExecute(item: ExecutiveActionItem) {
     if (!supabase || busy) return;
+    if (item.actionType === "reply_draft") {
+      const recipient = String(item.content.to || "the recipient");
+      const prompt = item.approvalStatus === "approved"
+        ? `Send the already approved email to ${recipient}?`
+        : `Approve and send this exact email to ${recipient}?`;
+      if (!window.confirm(prompt)) return;
+    }
     setBusy(item.id);
     setError("");
     setMessage("");
     setItemErrors(current => ({ ...current, [item.id]: "" }));
+    let approved = item.approvalStatus === "approved";
     try {
       const original = preparedText(item);
       const amended = drafts[item.id] ?? original;
-      await approveExecutiveActionItem(supabase, item, amended !== original ? { prepared_text: amended } : {});
-      setPacks(current => current.map(pack => ({ ...pack, items: pack.items.map(currentItem => currentItem.id === item.id ? { ...currentItem, approvalStatus: "approved" } : currentItem) })));
-      setMessage("Approved. The exact reviewed version has been recorded; no external action has been sent automatically.");
+      if (!approved) {
+        await approveExecutiveActionItem(supabase, item, amended !== original ? { prepared_text: amended } : {});
+        approved = true;
+        setPacks(current => current.map(pack => ({ ...pack, items: pack.items.map(currentItem => currentItem.id === item.id ? { ...currentItem, approvalStatus: "approved" } : currentItem) })));
+      }
+      if (executesOnApproval(item)) {
+        const result = await executeApprovedExecutiveActionItem(supabase, item.id);
+        setMessage(result.message);
+      } else {
+        setMessage("Approved. Your decision and the exact reviewed version have been recorded. This action has not changed an external system.");
+      }
       await load();
     } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "Unable to approve this action.";
+      const detail = reason instanceof Error ? reason.message : "Unable to complete this action.";
       setItemErrors(current => ({ ...current, [item.id]: detail }));
-      setError(`Approval failed: ${detail}`);
+      setError(`${approved ? "Approved, but execution failed" : "Approval failed"}: ${detail}`);
+      await load();
     } finally {
       setBusy("");
     }
@@ -250,11 +307,11 @@ export default function AttentionCentrePage() {
           {selected.missingFacts.length > 0 && <section className={styles.missing}><strong>{selectedIsActive ? "Still needs your judgement" : "Judgement notes at the time"}</strong>{selected.missingFacts.map(fact => <span key={fact}>{fact}</span>)}</section>}
 
           <section className={styles.items}><div className={styles.sectionHeading}><div><span>{selectedIsActive ? "PREPARED FOR APPROVAL" : "HISTORICAL PREPARED WORK"}</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} {selectedIsActive ? "ready" : "retained"}</h3></div>{selectedIsActive && <small>Approve items separately</small>}</div>
-            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={item.approvalStatus === "approved" ? styles.approved : ""}>{item.approvalStatus.replaceAll("_", " ")}</em></div>
+            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
               {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved"} />}
               {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
-              {itemErrors[item.id] && <p className={styles.error} role="alert">Approval failed: {itemErrors[item.id]}</p>}
-              <div className={styles.itemFooter}><span>{selectedIsActive ? item.approvalRequired ? "Nothing external happens until approval." : "Internal preparation only." : "Retained for reference. This version can no longer be approved."}</span>{selectedIsActive && <button onClick={() => void approve(item)} disabled={Boolean(busy) || item.approvalStatus === "approved"}><Check size={16} /> {item.approvalStatus === "approved" ? "Approved" : busy === item.id ? "Approving…" : "Approve exact version"}</button>}</div>
+              {itemErrors[item.id] && <p className={styles.error} role="alert">{itemErrors[item.id]}</p>}
+              <div className={styles.itemFooter}><span>{selectedIsActive ? approvalBoundary(item) : "Retained for reference. This version can no longer be approved."}</span><div>{link && <Link href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined}>{link.label} <ExternalLink size={15} /></Link>}{selectedIsActive && <button onClick={() => void approveAndExecute(item)} disabled={Boolean(busy) || item.executionStatus === "completed" || item.executionStatus === "executing" || (!executesOnApproval(item) && item.approvalStatus === "approved")}><Check size={16} /> {actionButtonLabel(item, busy === item.id)}</button>}</div></div>
             </article>; })}
           </section>
 

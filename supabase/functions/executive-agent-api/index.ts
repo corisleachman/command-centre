@@ -13,6 +13,9 @@ const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
 const TOKEN_KEY = Deno.env.get("CALENDAR_TOKEN_ENCRYPTION_KEY")!;
 const POLICY_VERSION = "revenue-ea-v2";
+const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -33,8 +36,11 @@ async function decrypt(value: string) {
   return new TextDecoder().decode(decrypted);
 }
 
-async function gmailFetch(path: string, accessToken: string) {
-  const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+async function gmailFetch(path: string, accessToken: string, init: RequestInit = {}) {
+  const response = await fetch(`https://gmail.googleapis.com/gmail/v1${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${accessToken}`, ...(init.headers ?? {}) },
+  });
   if (!response.ok) throw new Error(`Gmail request failed (${response.status}): ${await response.text()}`);
   return response.json();
 }
@@ -86,10 +92,15 @@ function trimQuoted(value: string) {
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-async function accessToken(admin: ReturnType<typeof createClient>, userId: string) {
+async function accessToken(admin: ReturnType<typeof createClient>, userId: string, requiredScopes = [GMAIL_READONLY_SCOPE]) {
   const { data: connection, error } = await admin.from("google_calendar_connections").select("encrypted_refresh_token,granted_scopes").eq("user_id", userId).single();
   if (error || !connection?.encrypted_refresh_token) throw new Error("Google account is not connected.");
-  if (!(connection.granted_scopes ?? []).includes("https://www.googleapis.com/auth/gmail.readonly")) throw new Error("Gmail read permission is not connected.");
+  const granted = connection.granted_scopes ?? [];
+  const missing = requiredScopes.filter(scope => !granted.includes(scope));
+  if (missing.length) {
+    const permission = missing.includes(DRIVE_FILE_SCOPE) ? "Google Drive file creation" : missing.includes(GMAIL_SEND_SCOPE) ? "Gmail sending" : "Gmail reading";
+    throw new Error(`${permission} permission is not connected. Reconnect Google from the Gmail page and approve the requested permission.`);
+  }
   const refreshToken = await decrypt(connection.encrypted_refresh_token);
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -143,6 +154,218 @@ function stableJson(value: unknown): string {
 async function hashContent(value: unknown) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stableJson(value)));
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function encodeBase64Url(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function encodedSubject(subject: string) {
+  const bytes = new TextEncoder().encode(subject);
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return `=?UTF-8?B?${btoa(binary)}?=`;
+}
+
+function readableDocumentText(markdown: string) {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+}
+
+function approvedContent(item: any, approval: any) {
+  const content = item.content && typeof item.content === "object" ? { ...item.content } : {};
+  const amendments = approval?.amendments && typeof approval.amendments === "object" ? approval.amendments : {};
+  if (!Object.prototype.hasOwnProperty.call(amendments, "prepared_text")) return content;
+  const preparedText = textValue(amendments.prepared_text);
+  if (item.action_type === "reply_draft") content.body = preparedText;
+  else if (item.action_type === "document_draft" || item.action_type === "meeting_brief") content.markdown = preparedText;
+  else content.text = preparedText;
+  return content;
+}
+
+async function sendApprovedEmail(accessTokenValue: string, content: Record<string, unknown>, threadId: string | null, actionItemId: string) {
+  const to = stringValue(content.to).replace(/[\r\n]+/g, "");
+  let subject = stringValue(content.subject);
+  const body = textValue(content.body);
+  if (!to || !subject || !body.trim()) throw new Error("The approved email is missing its recipient, subject or body.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error("The approved email recipient is invalid.");
+
+  const replyHeaders: string[] = [];
+  if (threadId) {
+    const thread = await gmailFetch(`/users/me/threads/${encodeURIComponent(threadId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`, accessTokenValue);
+    const last = thread.messages?.[thread.messages.length - 1];
+    const messageId = last ? header(last, "Message-ID") : "";
+    const references = [last ? header(last, "References") : "", messageId].filter(Boolean).join(" ").trim();
+    if (!/^re:/i.test(subject)) subject = `Re: ${subject.replace(/^re:\s*/i, "")}`;
+    if (messageId) replyHeaders.push(`In-Reply-To: ${messageId}`);
+    if (references) replyHeaders.push(`References: ${references}`);
+  }
+
+  const raw = [
+    `To: ${to}`,
+    `Subject: ${encodedSubject(subject)}`,
+    `X-Command-Centre-Action-ID: ${actionItemId}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    ...replyHeaders,
+    "",
+    body,
+  ].join("\r\n");
+  const sent = await gmailFetch("/users/me/messages/send", accessTokenValue, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: encodeBase64Url(raw), ...(threadId ? { threadId } : {}) }),
+  });
+  return { reference: `gmail:${sent.id}`, message: `Email sent to ${to}.` };
+}
+
+async function createApprovedDocument(accessTokenValue: string, content: Record<string, unknown>, actionItemId: string) {
+  const title = stringValue(content.title) || "Command Centre prepared document";
+  const body = readableDocumentText(stringValue(content.markdown) || stringValue(content.text) || stringValue(content.body));
+  if (!body) throw new Error("The approved document has no content.");
+
+  const createResponse = await fetch("https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessTokenValue}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: title,
+      mimeType: "application/vnd.google-apps.document",
+      appProperties: { commandCentreActionItemId: actionItemId },
+    }),
+  });
+  if (!createResponse.ok) throw new Error(`Google Drive creation failed (${createResponse.status}): ${await createResponse.text()}`);
+  const file = await createResponse.json();
+
+  const writeResponse = await fetch(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(file.id)}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessTokenValue}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: body } }] }),
+  });
+  if (!writeResponse.ok) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}`, { method: "DELETE", headers: { Authorization: `Bearer ${accessTokenValue}` } });
+    throw new Error(`Google Docs writing failed (${writeResponse.status}): ${await writeResponse.text()}`);
+  }
+  const reference = stringValue(file.webViewLink) || `https://docs.google.com/document/d/${file.id}/edit`;
+  return { reference, message: `Private Google Doc created: ${title}.` };
+}
+
+async function createApprovedTask(admin: ReturnType<typeof createClient>, userId: string, content: Record<string, unknown>, actionItemId: string, sourceUrl: string | null) {
+  const title = stringValue(content.title);
+  if (!title) throw new Error("The approved task has no title.");
+  const proposedCategory = stringValue(content.category);
+  const category = ["cash", "build", "health", "life"].includes(proposedCategory) ? proposedCategory : "cash";
+  const proposedPriority = Number(content.priority);
+  const priority = Number.isFinite(proposedPriority) ? Math.min(Math.max(Math.round(proposedPriority), 1), 5) : 3;
+  const proposedMinutes = Number(content.estimated_minutes);
+  const estimatedMinutes = Number.isFinite(proposedMinutes) ? Math.max(Math.round(proposedMinutes), 5) : 30;
+  const proposedDueOn = stringValue(content.due_on);
+  const dueOn = /^\d{4}-\d{2}-\d{2}$/.test(proposedDueOn) ? proposedDueOn : null;
+  const notes = [stringValue(content.description), sourceUrl ? `Source: ${sourceUrl}` : ""].filter(Boolean).join("\n\n") || null;
+  const { data: task, error } = await admin.from("tasks").upsert({
+    user_id: userId,
+    executive_action_item_id: actionItemId,
+    title,
+    category,
+    points: priority,
+    status: "ready",
+    priority,
+    estimated_minutes: estimatedMinutes,
+    due_on: dueOn,
+    notes,
+    is_today: false,
+    is_complete: false,
+    week_number: 1,
+    energy_required: "standard",
+    work_type: category === "cash" ? "communication" : category === "health" ? "health" : category === "life" ? "life" : "deep_work",
+    preferred_time: "any",
+    position: Date.now(),
+  }, { onConflict: "executive_action_item_id" }).select("id").single();
+  if (error) throw error;
+  return { reference: `task:${task.id}`, message: `Task created: ${title}.` };
+}
+
+async function settlePackStatus(admin: ReturnType<typeof createClient>, userId: string, packId: string) {
+  const { data: items, error } = await admin.from("action_items").select("approval_required,approval_status,execution_status").eq("user_id", userId).eq("action_pack_id", packId);
+  if (error) throw error;
+  const failed = (items ?? []).some(item => item.execution_status === "failed");
+  const pending = (items ?? []).some(item => item.approval_required && item.approval_status === "pending");
+  const status = failed ? "failed" : pending ? "ready_for_review" : "approved";
+  const { error: packError } = await admin.from("action_packs").update({ status, updated_at: new Date().toISOString() }).eq("id", packId).eq("user_id", userId).in("status", ["ready_for_review", "approved", "executing", "failed"]);
+  if (packError) throw packError;
+}
+
+async function executeApprovedAction(admin: ReturnType<typeof createClient>, userId: string, actionItemId: string) {
+  const { data: item, error: itemError } = await admin.from("action_items").select("id,action_pack_id,action_type,content,approval_status,execution_status,external_result_reference").eq("id", actionItemId).eq("user_id", userId).maybeSingle();
+  if (itemError) throw itemError;
+  if (!item) throw new Error("Prepared action not found.");
+  if (item.approval_status !== "approved") throw new Error("Approve the exact version before executing it.");
+  if (item.execution_status === "completed") {
+    return { status: "completed" as const, actionType: item.action_type, externalReference: item.external_result_reference, message: "This approved action has already been completed." };
+  }
+  if (!["reply_draft", "document_draft", "task_create"].includes(item.action_type)) throw new Error("This action is approval-only in the current release.");
+
+  const [{ data: pack, error: packError }, { data: approval, error: approvalError }] = await Promise.all([
+    admin.from("action_packs").select("id,event_id,status,source_url").eq("id", item.action_pack_id).eq("user_id", userId).maybeSingle(),
+    admin.from("action_approvals").select("amendments,approved_content_hash,decided_at").eq("action_item_id", item.id).eq("user_id", userId).order("decided_at", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (packError) throw packError;
+  if (approvalError) throw approvalError;
+  if (!pack || !["ready_for_review", "approved", "executing", "failed"].includes(pack.status)) throw new Error("This action pack is no longer executable.");
+  if (!approval) throw new Error("The immutable approval record is missing.");
+
+  let googleToken: string | null = null;
+  if (item.action_type === "reply_draft") googleToken = await accessToken(admin, userId, [GMAIL_SEND_SCOPE]);
+  if (item.action_type === "document_draft") googleToken = await accessToken(admin, userId, [DRIVE_FILE_SCOPE]);
+
+  const { data: claimed, error: claimError } = await admin.from("action_items").update({ execution_status: "executing", last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).in("execution_status", ["not_started", "failed"]).select("id").maybeSingle();
+  if (claimError) throw claimError;
+  if (!claimed) throw new Error("This approved action is already being executed. Reload before trying again.");
+
+  const content = approvedContent(item, approval);
+  let externalReference: string | null = null;
+  try {
+    let result: { reference: string; message: string };
+    if (item.action_type === "reply_draft") {
+      const { data: event, error: eventError } = await admin.from("executive_events").select("entity_type,entity_id").eq("id", pack.event_id).eq("user_id", userId).maybeSingle();
+      if (eventError) throw eventError;
+      const threadId = event?.entity_type === "gmail_thread" ? event.entity_id : null;
+      result = await sendApprovedEmail(googleToken!, content, threadId, item.id);
+    } else if (item.action_type === "document_draft") {
+      result = await createApprovedDocument(googleToken!, content, item.id);
+    } else {
+      result = await createApprovedTask(admin, userId, content, item.id, pack.source_url);
+    }
+    externalReference = result.reference;
+    const { error: completionError } = await admin.from("action_items").update({ execution_status: "completed", executed_at: new Date().toISOString(), external_result_reference: externalReference, last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).eq("execution_status", "executing");
+    if (completionError) throw completionError;
+    await settlePackStatus(admin, userId, pack.id);
+    return { status: "completed" as const, actionType: item.action_type, externalReference, message: result.message };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Approved action execution failed.";
+    if (!externalReference) {
+      await admin.from("action_items").update({ execution_status: "failed", last_error: detail, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).eq("execution_status", "executing");
+      await settlePackStatus(admin, userId, pack.id);
+    }
+    throw new Error(externalReference ? "The external action completed, but its confirmation could not be recorded. Do not retry it until the execution record is checked." : detail);
+  }
 }
 
 async function supersedeEarlierThreadPacks(
@@ -484,6 +707,12 @@ Deno.serve(async request => {
 
     if (body.action === "generateBrief") {
       return json(await generateBrief(admin, user.id));
+    }
+
+    if (body.action === "executeApprovedAction") {
+      const itemId = String(body.itemId || "").trim();
+      if (!itemId) return json({ error: "itemId is required." }, 400);
+      return json(await executeApprovedAction(admin, user.id, itemId));
     }
 
     return json({ error: "Unknown action." }, 400);
