@@ -55,6 +55,44 @@ Deno.test("newsletter is suppressed as noise", () => {
   if (result.actions.length) throw new Error("Newsletter should not prepare actions");
 });
 
+Deno.test("Everyday AI marketing copy cannot impersonate a commercial conversation", () => {
+  const result = assessConversation([{
+    id: "everyday-ai-newsletter",
+    threadId: "everyday-ai-thread",
+    from: "Everyday AI <info@youreverydayai.com>",
+    to: "coris@example.com",
+    subject: "Re: New: Google Gemini adds more connectors",
+    body: "Get started with the latest AI tools. Want help with your engagement? Subscribe Here. Hire Us To Speak. Partner with Us.",
+    date: new Date(now).toUTCString(),
+    internalDate: now,
+    mine: false,
+    gmailLabels: ["INBOX", "CATEGORY_PRIMARY"],
+  }]);
+
+  if (result.category !== "noise") throw new Error(`Newsletter should be noise, got ${result.category}`);
+  if (result.attentionLevel !== "silent") throw new Error(`Newsletter should be silent, got ${result.attentionLevel}`);
+  if (result.newState !== "filtered_as_noise") throw new Error(`Unexpected state: ${result.newState}`);
+  if (result.actions.length) throw new Error("Newsletter should not prepare reply, document, task or follow-up actions");
+});
+
+Deno.test("Gmail bulk headers are a hard stop even when copy contains buying signals", () => {
+  const result = assessConversation([{
+    id: "bulk-message",
+    threadId: "bulk-thread",
+    from: "AI Update <info@example.com>",
+    to: "coris@example.com",
+    subject: "Ready to move forward?",
+    body: "This is incredibly helpful. What do you need from me to get started?",
+    date: new Date(now).toUTCString(),
+    internalDate: now,
+    mine: false,
+    automated: true,
+  }]);
+
+  if (result.attentionLevel !== "silent") throw new Error(`Bulk message should be silent, got ${result.attentionLevel}`);
+  if (result.actions.length) throw new Error("Bulk message should never prepare actions");
+});
+
 Deno.test("an outbound reply moves the thread to waiting without another interruption", () => {
   const result = assessConversation([
     {
