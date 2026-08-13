@@ -11,7 +11,6 @@ import {
   ExternalLink,
   FileText,
   Mail,
-  MessageSquareText,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -58,6 +57,10 @@ function proposedDetails(item: ExecutiveActionItem) {
   return Object.entries(item.content).filter(([key, value]) => !ignored.has(key) && value != null && value !== "");
 }
 
+function isActivePack(pack: ExecutiveActionPack) {
+  return ["ready_for_review", "approved", "executing", "failed"].includes(pack.status);
+}
+
 export default function AttentionCentrePage() {
   const [user, setUser] = useState<User | null>(null);
   const [packs, setPacks] = useState<ExecutiveActionPack[]>([]);
@@ -97,7 +100,13 @@ export default function AttentionCentrePage() {
       setPacks(next);
       setNotDeployed(false);
       const requested = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("pack") : null;
-      setSelectedId(current => (requested && next.some(pack => pack.id === requested) ? requested : current && next.some(pack => pack.id === current) ? current : next[0]?.id ?? ""));
+      if (requested) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("pack");
+        window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+      const nextActive = next.filter(isActivePack);
+      setSelectedId(current => (requested && next.some(pack => pack.id === requested) ? requested : current && nextActive.some(pack => pack.id === current) ? current : nextActive[0]?.id ?? ""));
       const prepared: Record<string, string> = {};
       next.forEach(pack => pack.items.forEach(item => { prepared[item.id] = preparedText(item); }));
       setDrafts(prepared);
@@ -116,8 +125,9 @@ export default function AttentionCentrePage() {
   useEffect(() => { if (user) void load(); }, [user]);
 
   const selected = useMemo(() => packs.find(pack => pack.id === selectedId) ?? null, [packs, selectedId]);
-  const activePacks = packs.filter(pack => ["ready_for_review", "approved", "executing", "failed"].includes(pack.status));
+  const activePacks = packs.filter(isActivePack);
   const historyPacks = packs.filter(pack => !activePacks.includes(pack));
+  const selectedIsActive = selected ? isActivePack(selected) : false;
 
   async function selectPack(pack: ExecutiveActionPack) {
     setSelectedId(pack.id);
@@ -225,22 +235,22 @@ export default function AttentionCentrePage() {
       </aside>
 
       <section className={styles.review}>
-        {!selected && <div className={styles.emptyReview}><MessageSquareText size={32} /><h2>No prepared action selected</h2><p>When something meaningful changes, the interpretation and finished work will appear here.</p></div>}
+        {!selected && <div className={styles.emptyReview}><CheckCircle2 size={32} /><h2>Nothing needs your attention</h2><p>Completed and superseded items are retained under Recent history.</p></div>}
         {selected && <>
-          <div className={styles.reviewHeader}><div><span className={styles.level}>{attentionLabel(selected.attentionLevel)} · score {selected.assessment?.attentionScore ?? "-"}</span><h2>{selected.title}</h2><p>{selected.executiveSummary}</p></div><div className={styles.headerActions}><button onClick={() => void snooze(selected)} disabled={Boolean(busy)}><Clock3 size={15} /> Tomorrow</button><button onClick={() => void dismiss(selected)} disabled={Boolean(busy)}><X size={15} /> Dismiss</button></div></div>
+          <div className={styles.reviewHeader}><div><span className={styles.level}>{selectedIsActive ? `${attentionLabel(selected.attentionLevel)} · score ${selected.assessment?.attentionScore ?? "-"}` : `Recent history · ${selected.status.replaceAll("_", " ")}`}</span><h2>{selected.title}</h2><p>{selected.executiveSummary}</p></div>{selectedIsActive && <div className={styles.headerActions}><button onClick={() => void snooze(selected)} disabled={Boolean(busy)}><Clock3 size={15} /> Tomorrow</button><button onClick={() => void dismiss(selected)} disabled={Boolean(busy)}><X size={15} /> Dismiss</button></div>}</div>
 
-          <div className={styles.contextGrid}><div><span>WHY NOW</span><p>{selected.whyNow || selected.assessment?.consequenceOfDelay || "Prepared for your next review."}</p></div><div><span>REVIEW BY</span><p>{formattedDate(selected.reviewBy)}</p></div><div><span>STATE CHANGE</span><p>{selected.assessment?.previousState || "Unknown"} → {selected.assessment?.newState || "No stage change proposed"}</p></div></div>
+          <div className={styles.contextGrid}><div><span>{selectedIsActive ? "WHY NOW" : "WHY IT WAS RAISED"}</span><p>{selected.whyNow || selected.assessment?.consequenceOfDelay || "Prepared for your next review."}</p></div><div><span>{selectedIsActive ? "REVIEW BY" : "ORIGINAL REVIEW BY"}</span><p>{formattedDate(selected.reviewBy)}</p></div><div><span>STATE CHANGE</span><p>{selected.assessment?.previousState || "Unknown"} → {selected.assessment?.newState || "No stage change proposed"}</p></div></div>
 
           {selected.assessment?.evidence.length ? <section className={styles.evidence}><h3>What this is based on</h3>{selected.assessment.evidence.map((item, index) => <blockquote key={`${item.quote}-${index}`}>{item.quote || item.label}<small>{item.label && item.quote ? item.label : item.source}</small></blockquote>)}</section> : null}
 
-          {selected.missingFacts.length > 0 && <section className={styles.missing}><strong>Still needs your judgement</strong>{selected.missingFacts.map(fact => <span key={fact}>{fact}</span>)}</section>}
+          {selected.missingFacts.length > 0 && <section className={styles.missing}><strong>{selectedIsActive ? "Still needs your judgement" : "Judgement notes at the time"}</strong>{selected.missingFacts.map(fact => <span key={fact}>{fact}</span>)}</section>}
 
-          <section className={styles.items}><div className={styles.sectionHeading}><div><span>PREPARED FOR APPROVAL</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} ready</h3></div><small>Approve items separately</small></div>
+          <section className={styles.items}><div className={styles.sectionHeading}><div><span>{selectedIsActive ? "PREPARED FOR APPROVAL" : "HISTORICAL PREPARED WORK"}</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} {selectedIsActive ? "ready" : "retained"}</h3></div>{selectedIsActive && <small>Approve items separately</small>}</div>
             {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={item.approvalStatus === "approved" ? styles.approved : ""}>{item.approvalStatus.replaceAll("_", " ")}</em></div>
-              {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={item.approvalStatus === "approved"} />}
+              {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved"} />}
               {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
               {itemErrors[item.id] && <p className={styles.error} role="alert">Approval failed: {itemErrors[item.id]}</p>}
-              <div className={styles.itemFooter}><span>{item.approvalRequired ? "Nothing external happens until approval." : "Internal preparation only."}</span><button onClick={() => void approve(item)} disabled={Boolean(busy) || item.approvalStatus === "approved"}><Check size={16} /> {item.approvalStatus === "approved" ? "Approved" : busy === item.id ? "Approving…" : "Approve exact version"}</button></div>
+              <div className={styles.itemFooter}><span>{selectedIsActive ? item.approvalRequired ? "Nothing external happens until approval." : "Internal preparation only." : "Retained for reference. This version can no longer be approved."}</span>{selectedIsActive && <button onClick={() => void approve(item)} disabled={Boolean(busy) || item.approvalStatus === "approved"}><Check size={16} /> {item.approvalStatus === "approved" ? "Approved" : busy === item.id ? "Approving…" : "Approve exact version"}</button>}</div>
             </article>; })}
           </section>
 
