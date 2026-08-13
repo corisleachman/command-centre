@@ -58,7 +58,7 @@ function proposedDetails(item: ExecutiveActionItem) {
 }
 
 function isActivePack(pack: ExecutiveActionPack) {
-  return ["ready_for_review", "approved", "executing", "failed"].includes(pack.status);
+  return ["ready_for_review", "executing", "failed"].includes(pack.status);
 }
 
 export default function AttentionCentrePage() {
@@ -96,7 +96,7 @@ export default function AttentionCentrePage() {
     setError("");
     try {
       await supabase.rpc("seed_executive_agent_rules", { p_user_id: user.id });
-      const next = await loadExecutiveActionPacks(supabase, user.id, { limit: 30, includeCompleted: true });
+      const next = await loadExecutiveActionPacks(supabase, user.id, { limit: 60, includeCompleted: true });
       setPacks(next);
       setNotDeployed(false);
       const requested = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("pack") : null;
@@ -126,7 +126,10 @@ export default function AttentionCentrePage() {
 
   const selected = useMemo(() => packs.find(pack => pack.id === selectedId) ?? null, [packs, selectedId]);
   const activePacks = packs.filter(isActivePack);
-  const historyPacks = packs.filter(pack => !activePacks.includes(pack));
+  const historyPacks = packs
+    .filter(pack => !activePacks.includes(pack))
+    .sort((left, right) => Date.parse(right.updatedAt || right.createdAt) - Date.parse(left.updatedAt || left.createdAt));
+  const recentHistory = historyPacks.slice(0, 5);
   const selectedIsActive = selected ? isActivePack(selected) : false;
 
   async function selectPack(pack: ExecutiveActionPack) {
@@ -169,7 +172,8 @@ export default function AttentionCentrePage() {
     try {
       const result = await syncExecutiveInbox(supabase, 15);
       await load();
-      setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.`);
+      const recovered = result.retained ? ` ${result.retained} replied conversation${result.retained === 1 ? " was" : "s were"} retained in history.` : "";
+      setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.${recovered}`);
     } catch (reason) {
       setError(reason instanceof Error ? `Gmail recheck failed: ${reason.message}` : "Gmail recheck failed.");
     } finally {
@@ -231,7 +235,7 @@ export default function AttentionCentrePage() {
       <aside className={styles.queue}>
         <div className={styles.queueHeading}><span>NEEDS REVIEW</span><strong>{activePacks.length}</strong></div>
         <div className={styles.packList}>{activePacks.map(pack => <button key={pack.id} className={`${styles.packButton} ${selectedId === pack.id ? styles.selected : ""} ${!pack.readAt ? styles.unread : ""}`} onClick={() => void selectPack(pack)}><span>{attentionLabel(pack.attentionLevel)}</span><strong>{pack.title}</strong><small>{pack.contactName || pack.organisationName || "Command Centre"} · {pack.items.length} prepared</small></button>)}{!activePacks.length && <div className={styles.emptyQueue}><CheckCircle2 size={21} /><strong>Nothing awaiting review</strong><p>The agent has not found a change that needs your decision.</p></div>}</div>
-        {historyPacks.length > 0 && <details className={styles.history}><summary>Recent history ({historyPacks.length})</summary>{historyPacks.slice(0, 8).map(pack => <button key={pack.id} onClick={() => void selectPack(pack)}><strong>{pack.title}</strong><small>{pack.status.replaceAll("_", " ")}</small></button>)}</details>}
+        {recentHistory.length > 0 && <details className={styles.history}><summary>Recent history ({recentHistory.length})</summary>{recentHistory.map(pack => <button key={pack.id} onClick={() => void selectPack(pack)}><strong>{pack.title}</strong><small>{pack.status.replaceAll("_", " ")}</small></button>)}</details>}
       </aside>
 
       <section className={styles.review}>
