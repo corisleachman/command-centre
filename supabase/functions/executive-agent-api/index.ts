@@ -551,14 +551,42 @@ async function retainLatestIncomingPreparation(
   if (!historical.packId) return null;
 
   const now = new Date().toISOString();
+  const { error: replyError } = await admin
+    .from("action_items")
+    .update({ approval_status: "not_required", execution_status: "cancelled", last_error: null, updated_at: now })
+    .eq("action_pack_id", historical.packId)
+    .eq("user_id", userId)
+    .eq("action_type", "reply_draft")
+    .neq("execution_status", "completed");
+  if (replyError) throw replyError;
+
+  const { data: followOnItems, error: followOnError } = await admin
+    .from("action_items")
+    .select("id,action_type,approval_status,execution_status")
+    .eq("action_pack_id", historical.packId)
+    .eq("user_id", userId)
+    .neq("action_type", "reply_draft");
+  if (followOnError) throw followOnError;
+  const hasFollowOnDecision = (followOnItems ?? []).some(item =>
+    item.execution_status !== "completed"
+      && item.execution_status !== "cancelled"
+      && (item.approval_status === "pending" || item.execution_status === "failed")
+  );
+  const contact = historical.assessment.contactName || historical.assessment.organisationName || "this conversation";
+  const packUpdate = hasFollowOnDecision
+    ? {
+        status: "ready_for_review",
+        title: `${contact}: follow-on actions are ready`,
+        executive_summary: `You have replied to ${contact}. The prepared follow-on work remains available for review.`,
+        why_now: "The reply is handled. Review the remaining document, task and commercial follow-on actions when ready.",
+        attention_level: "morning_brief",
+        review_by: null,
+        superseded_by: null,
+        updated_at: now,
+      }
+    : { status: "superseded", updated_at: now };
   const [{ data: retainedPacks, error: packError }, { error: notificationError }] = await Promise.all([
-    admin
-      .from("action_packs")
-      .update({ status: "superseded", updated_at: now })
-      .eq("id", historical.packId)
-      .eq("user_id", userId)
-      .in("status", ["ready_for_review", "approved", "failed"])
-      .select("id"),
+    admin.from("action_packs").update(packUpdate).eq("id", historical.packId).eq("user_id", userId).in("status", ["ready_for_review", "approved", "failed", "superseded"]).select("id"),
     admin
       .from("executive_notifications")
       .update({ status: "dismissed", updated_at: now })

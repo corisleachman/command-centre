@@ -21,6 +21,7 @@ The agent prepares every action before it commits anything. Supported actions ca
 - Task approval creates one idempotent Command Centre task linked to the action item.
 - A stale or missing immutable approval cannot execute.
 - Completed actions retain their external reference for audit and access from Recent history.
+- If Coris replies directly in Gmail, the reply draft is marked handled while prepared follow-on decisions remain available.
 - Sharing documents, changing CRM opportunities and activating follow-up automation are not enabled in this slice.
 
 After deployment, reconnect Google once from `/v2/gmail` to grant the additional `https://www.googleapis.com/auth/drive.file` scope before testing document creation.

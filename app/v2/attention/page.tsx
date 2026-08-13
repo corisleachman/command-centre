@@ -63,6 +63,7 @@ function executesOnApproval(item: ExecutiveActionItem) {
 }
 
 function actionButtonLabel(item: ExecutiveActionItem, isBusy: boolean) {
+  if (item.executionStatus === "cancelled") return item.actionType === "reply_draft" ? "Reply already handled" : "No longer needed";
   if (item.executionStatus === "completed") {
     if (item.actionType === "reply_draft") return "Email sent";
     if (item.actionType === "document_draft") return "Document created";
@@ -82,6 +83,7 @@ function actionButtonLabel(item: ExecutiveActionItem, isBusy: boolean) {
 }
 
 function approvalBoundary(item: ExecutiveActionItem) {
+  if (item.executionStatus === "cancelled") return "The source conversation changed, so this prepared action is no longer needed.";
   if (item.executionStatus === "completed") return "The approved version has been completed and recorded.";
   if (item.actionType === "reply_draft") return "Nothing will be sent until you approve this exact version.";
   if (item.actionType === "document_draft") return "No Google Drive file exists until you approve its creation.";
@@ -229,7 +231,7 @@ export default function AttentionCentrePage() {
     try {
       const result = await syncExecutiveInbox(supabase, 15);
       await load();
-      const recovered = result.retained ? ` ${result.retained} replied conversation${result.retained === 1 ? " was" : "s were"} retained in history.` : "";
+      const recovered = result.retained ? ` ${result.retained} replied conversation${result.retained === 1 ? " was" : "s were"} updated so the remaining follow-on work stays available.` : "";
       setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.${recovered}`);
     } catch (reason) {
       setError(reason instanceof Error ? `Gmail recheck failed: ${reason.message}` : "Gmail recheck failed.");
@@ -307,11 +309,11 @@ export default function AttentionCentrePage() {
           {selected.missingFacts.length > 0 && <section className={styles.missing}><strong>{selectedIsActive ? "Still needs your judgement" : "Judgement notes at the time"}</strong>{selected.missingFacts.map(fact => <span key={fact}>{fact}</span>)}</section>}
 
           <section className={styles.items}><div className={styles.sectionHeading}><div><span>{selectedIsActive ? "PREPARED FOR APPROVAL" : "HISTORICAL PREPARED WORK"}</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} {selectedIsActive ? "ready" : "retained"}</h3></div>{selectedIsActive && <small>Approve items separately</small>}</div>
-            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
-              {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved"} />}
+            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.executionStatus === "cancelled" ? "no longer needed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || item.executionStatus === "cancelled" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
+              {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved" || item.executionStatus === "cancelled"} />}
               {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
               {itemErrors[item.id] && <p className={styles.error} role="alert">{itemErrors[item.id]}</p>}
-              <div className={styles.itemFooter}><span>{selectedIsActive ? approvalBoundary(item) : "Retained for reference. This version can no longer be approved."}</span><div>{link && <Link href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined}>{link.label} <ExternalLink size={15} /></Link>}{selectedIsActive && <button onClick={() => void approveAndExecute(item)} disabled={Boolean(busy) || item.executionStatus === "completed" || item.executionStatus === "executing" || (!executesOnApproval(item) && item.approvalStatus === "approved")}><Check size={16} /> {actionButtonLabel(item, busy === item.id)}</button>}</div></div>
+              <div className={styles.itemFooter}><span>{selectedIsActive ? approvalBoundary(item) : "Retained for reference. This version can no longer be approved."}</span><div>{link && <Link href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined}>{link.label} <ExternalLink size={15} /></Link>}{selectedIsActive && <button onClick={() => void approveAndExecute(item)} disabled={Boolean(busy) || item.executionStatus === "completed" || item.executionStatus === "executing" || item.executionStatus === "cancelled" || (!executesOnApproval(item) && item.approvalStatus === "approved")}><Check size={16} /> {actionButtonLabel(item, busy === item.id)}</button>}</div></div>
             </article>; })}
           </section>
 
