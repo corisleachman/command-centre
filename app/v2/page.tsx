@@ -149,7 +149,7 @@ export default function V2Page() {
         void syncExecutiveInbox(supabase, 8)
           .then(() => Promise.all([loadExecutiveActionPacks(supabase, user.id, { limit: 8 }), loadTodaysExecutiveBrief(supabase, user.id)]))
           .then(([packs, brief]) => { setExecutivePacks(packs); setMorningBrief(brief); })
-          .catch(() => { /* Shadow-mode inbox checks must never block Today. */ });
+          .catch(reason => setError(reason instanceof Error ? `Gmail recheck failed: ${reason.message}` : "Gmail recheck failed."));
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load Today.");

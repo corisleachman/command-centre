@@ -122,7 +122,7 @@ async function loadThread(threadId: string, token: string): Promise<ExecutiveSou
       body: trimQuoted(bodyText(message.payload) || message.snippet || ""),
       date: header(message, "Date"),
       internalDate: Number(message.internalDate || Date.parse(header(message, "Date")) || Date.now()),
-      mine: from.toLowerCase().includes(ownEmail),
+      mine: gmailLabels.includes("SENT") || from.toLowerCase().includes(ownEmail),
       automated: Boolean(listUnsubscribe || listId)
         || /bulk|list|junk/.test(precedence)
         || Boolean(autoSubmitted && autoSubmitted !== "no")
@@ -316,7 +316,7 @@ async function persistAssessment(
 async function scanInbox(admin: ReturnType<typeof createClient>, userId: string, maxResultsInput = 10) {
   const token = await accessToken(admin, userId);
   const maxResults = Math.min(Math.max(Number(maxResultsInput || 10), 1), 15);
-  const query = "newer_than:3d label:inbox -category:promotions -category:social -category:forums";
+  const query = "newer_than:3d {label:inbox label:sent} -category:promotions -category:social -category:forums";
   const list = await gmailFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, token);
   const threadIds = [...new Set((list.messages ?? []).map((message: any) => String(message.threadId || "")).filter(Boolean))];
   const results = [];

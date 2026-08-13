@@ -12,6 +12,7 @@ import {
   FileText,
   Mail,
   MessageSquareText,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   X,
@@ -28,6 +29,7 @@ import {
   markExecutivePackRead,
   snoozeExecutivePack,
   submitExecutiveFeedback,
+  syncExecutiveInbox,
   type ExecutiveActionItem,
   type ExecutiveActionPack,
   type ExecutiveFeedbackType,
@@ -66,6 +68,7 @@ export default function AttentionCentrePage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [notDeployed, setNotDeployed] = useState(false);
+  const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!supabase) { setError("Supabase is not configured for this deployment."); setLoading(false); return; }
@@ -131,14 +134,34 @@ export default function AttentionCentrePage() {
     setBusy(item.id);
     setError("");
     setMessage("");
+    setItemErrors(current => ({ ...current, [item.id]: "" }));
     try {
       const original = preparedText(item);
       const amended = drafts[item.id] ?? original;
       await approveExecutiveActionItem(supabase, item, amended !== original ? { prepared_text: amended } : {});
+      setPacks(current => current.map(pack => ({ ...pack, items: pack.items.map(currentItem => currentItem.id === item.id ? { ...currentItem, approvalStatus: "approved" } : currentItem) })));
       setMessage("Approved. The exact reviewed version has been recorded; no external action has been sent automatically.");
       await load();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to approve this action.");
+      const detail = reason instanceof Error ? reason.message : "Unable to approve this action.";
+      setItemErrors(current => ({ ...current, [item.id]: detail }));
+      setError(`Approval failed: ${detail}`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function recheckGmail() {
+    if (!supabase || !user || busy) return;
+    setBusy("recheck");
+    setError("");
+    setMessage("");
+    try {
+      const result = await syncExecutiveInbox(supabase, 15);
+      await load();
+      setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? `Gmail recheck failed: ${reason.message}` : "Gmail recheck failed.");
     } finally {
       setBusy("");
     }
@@ -187,7 +210,7 @@ export default function AttentionCentrePage() {
   if (!user && !loading) return <main className={styles.authPage}><div className={styles.authCard}><BellRing /><h1>Sign in first</h1><p>The Attention Centre uses your existing private Command Centre session.</p><Link href="/">Open Command Centre</Link></div></main>;
 
   return <main className={styles.page}>
-    <header className={styles.header}><div><Link href="/v2"><ArrowLeft size={16} /> Today</Link><span>EXECUTIVE AGENT</span><h1>Attention Centre</h1><p>Important changes, interpreted and prepared before they reach you.</p></div><div className={styles.trust}><ShieldCheck size={18} /><span><strong>Prepare by default</strong><small>External action requires approval</small></span></div></header>
+    <header className={styles.header}><div><Link href="/v2"><ArrowLeft size={16} /> Today</Link><span>EXECUTIVE AGENT</span><h1>Attention Centre</h1><p>Important changes, interpreted and prepared before they reach you.</p></div><div className={styles.headerActions}><button onClick={() => void recheckGmail()} disabled={Boolean(busy)}><RefreshCw size={15} /> {busy === "recheck" ? "Checking…" : "Recheck Gmail"}</button><div className={styles.trust}><ShieldCheck size={18} /><span><strong>Prepare by default</strong><small>External action requires approval</small></span></div></div></header>
 
     {loading && <div className={styles.state}>Loading prepared work...</div>}
     {error && <div className={styles.error}>{error}</div>}
@@ -216,6 +239,7 @@ export default function AttentionCentrePage() {
             {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={item.approvalStatus === "approved" ? styles.approved : ""}>{item.approvalStatus.replaceAll("_", " ")}</em></div>
               {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={item.approvalStatus === "approved"} />}
               {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
+              {itemErrors[item.id] && <p className={styles.error} role="alert">Approval failed: {itemErrors[item.id]}</p>}
               <div className={styles.itemFooter}><span>{item.approvalRequired ? "Nothing external happens until approval." : "Internal preparation only."}</span><button onClick={() => void approve(item)} disabled={Boolean(busy) || item.approvalStatus === "approved"}><Check size={16} /> {item.approvalStatus === "approved" ? "Approved" : busy === item.id ? "Approving…" : "Approve exact version"}</button></div>
             </article>; })}
           </section>
@@ -228,4 +252,3 @@ export default function AttentionCentrePage() {
     </div>}
   </main>;
 }
-
