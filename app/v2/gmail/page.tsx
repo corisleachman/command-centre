@@ -16,6 +16,7 @@ import {
   type GmailSendResult, type GmailThreadResult,
 } from "../../../lib/v2-gmail";
 import CreateTaskModal from "../components/CreateTaskModal";
+import { prepareExecutiveThread } from "../../../lib/v2-executive-agent";
 import styles from "./gmail.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
@@ -64,6 +65,7 @@ export default function GmailActionCapturePage() {
   const [thread, setThread] = useState<GmailThreadResult | null>(null);
   const [replyBody, setReplyBody] = useState("");
   const [replyLoading, setReplyLoading] = useState(false);
+  const [preparingPack, setPreparingPack] = useState(false);
   const [followUpEnabled, setFollowUpEnabled] = useState(true);
   const [followUpOn, setFollowUpOn] = useState(followUpDate());
   const [composeOpen, setComposeOpen] = useState(false);
@@ -196,6 +198,21 @@ export default function GmailActionCapturePage() {
       setError(reason instanceof Error ? reason.message : "Unable to suggest a reply.");
     } finally {
       setReplyLoading(false);
+    }
+  }
+
+  async function prepareActionPack() {
+    if (!supabase || !conversationEmail) return;
+    setPreparingPack(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await prepareExecutiveThread(supabase, conversationEmail.threadId);
+      setMessage(result.packId ? "Executive action pack prepared. Open Attention to review the interpretation, reply and next steps." : "Conversation assessed. It did not meet the threshold for a prepared action pack.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to prepare an executive action pack.");
+    } finally {
+      setPreparingPack(false);
     }
   }
 
@@ -393,7 +410,7 @@ export default function GmailActionCapturePage() {
       {threadLoading ? <div className={styles.drawerState}>Loading conversation…</div> : thread ? <>
         <section className={styles.threadMessages}>{thread.messages.map(item => <article key={item.id} className={item.mine ? styles.mine : styles.theirs}><div><strong>{item.mine ? "You" : senderName(item.from)}</strong><time>{item.date}</time></div><p>{item.body || "(No readable message body)"}</p></article>)}</section>
         <section className={styles.replyComposer}>
-          <div className={styles.replyHeading}><div><span>REPLY</span><strong>Draft in context</strong></div><button onClick={() => void suggestReply()} disabled={replyLoading}><Sparkles size={15} /> {replyLoading ? "Drafting…" : "Suggest reply"}</button></div>
+          <div className={styles.replyHeading}><div><span>REPLY</span><strong>Draft in context</strong></div><div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}><button onClick={() => void prepareActionPack()} disabled={preparingPack}><ShieldCheck size={15} /> {preparingPack ? "Preparing…" : "Prepare next steps"}</button><button onClick={() => void suggestReply()} disabled={replyLoading}><Sparkles size={15} /> {replyLoading ? "Drafting…" : "Suggest reply"}</button></div></div>
           {replyBody && <div className={styles.toneRow}><span>Adjust</span><button onClick={() => void suggestReply("warmer")}>Warmer</button><button onClick={() => void suggestReply("shorter")}>Shorter</button><button onClick={() => void suggestReply("direct")}>More direct</button><button onClick={() => void suggestReply("formal")}>More formal</button></div>}
           <textarea value={replyBody} onChange={event => setReplyBody(event.target.value)} rows={9} placeholder="Write a reply or use Suggest reply…" />
           <label className={styles.followUpRow}><input type="checkbox" checked={followUpEnabled} onChange={event => setFollowUpEnabled(event.target.checked)} /><span>Create a follow-up task if there is no response by</span><input type="date" value={followUpOn} onChange={event => setFollowUpOn(event.target.value)} disabled={!followUpEnabled} /></label>

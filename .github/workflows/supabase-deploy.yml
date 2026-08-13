@@ -36,6 +36,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Test Executive Agent policy
+        run: deno test supabase/functions/_shared/executive-policy.test.ts
+
       - uses: supabase/setup-cli@v1
         with:
           version: 2.101.0
@@ -98,6 +105,7 @@ jobs:
             for function_dir in supabase/functions/*; do
               [ -d "$function_dir" ] || continue
               function_name="$(basename "$function_dir")"
+              [[ "$function_name" == _* ]] && continue
               supabase functions deploy "$function_name" --project-ref "$SUPABASE_PROJECT_ID" --no-verify-jwt
             done
           fi
