@@ -43,6 +43,7 @@ export type ExecutiveActionPack = {
   readAt: string | null;
   snoozedUntil: string | null;
   createdAt: string;
+  updatedAt: string;
   assessment: {
     category: string;
     summary: string;
@@ -128,6 +129,7 @@ function parsePack(row: Row): ExecutiveActionPack {
     readAt: asNullableString(row.read_at),
     snoozedUntil: asNullableString(row.snoozed_until),
     createdAt: asString(row.created_at),
+    updatedAt: asString(row.updated_at),
     assessment: assessmentRow ? {
       category: asString(assessmentRow.category),
       summary: asString(assessmentRow.summary),
@@ -153,7 +155,7 @@ export async function loadExecutiveActionPacks(
     .select(`
       id,event_id,assessment_id,title,executive_summary,why_now,status,attention_level,review_by,
       contact_name,organisation_name,source_url,missing_facts,proposed_changes,confidence,
-      read_at,snoozed_until,created_at,
+      read_at,snoozed_until,created_at,updated_at,
       assessment:attention_assessments(category,summary,previous_state,new_state,changes,explicit_requests,evidence,consequence_of_delay,attention_score),
       items:action_items(id,action_type,title,content,content_version,content_hash,approval_required,approval_status,execution_status,position)
     `)
@@ -162,7 +164,7 @@ export async function loadExecutiveActionPacks(
     .limit(options.limit ?? 20);
 
   if (!options.includeCompleted) {
-    query = query.in("status", ["ready_for_review", "approved", "executing", "failed"]);
+    query = query.in("status", ["ready_for_review", "executing", "failed"]);
   }
 
   const { data, error } = await query;
@@ -204,7 +206,7 @@ export async function syncExecutiveInbox(client: SupabaseClient, maxResults = 10
   const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "scanInbox", maxResults } });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
-  return data as { checked: number; prepared: number };
+  return data as { checked: number; prepared: number; retained: number };
 }
 
 export async function markExecutivePackRead(client: SupabaseClient, userId: string, packId: string) {

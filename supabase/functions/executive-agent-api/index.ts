@@ -313,6 +313,41 @@ async function persistAssessment(
   return { eventId: event.id, assessmentId: assessmentRow.id, packId: pack.id, assessment };
 }
 
+async function retainLatestIncomingPreparation(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  messages: ExecutiveSourceMessage[],
+  sourceUrl: string,
+) {
+  const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
+  if (!sorted.at(-1)?.mine) return null;
+  const incomingIndex = sorted.findLastIndex(message => !message.mine);
+  if (incomingIndex < 0) return null;
+
+  const historical = await persistAssessment(admin, userId, sorted.slice(0, incomingIndex + 1), sourceUrl);
+  if (!historical.packId) return null;
+
+  const now = new Date().toISOString();
+  const [{ data: retainedPacks, error: packError }, { error: notificationError }] = await Promise.all([
+    admin
+      .from("action_packs")
+      .update({ status: "superseded", updated_at: now })
+      .eq("id", historical.packId)
+      .eq("user_id", userId)
+      .in("status", ["ready_for_review", "approved", "failed"])
+      .select("id"),
+    admin
+      .from("executive_notifications")
+      .update({ status: "dismissed", updated_at: now })
+      .eq("action_pack_id", historical.packId)
+      .eq("user_id", userId)
+      .eq("status", "pending"),
+  ]);
+  if (packError) throw packError;
+  if (notificationError) throw notificationError;
+  return retainedPacks?.length ? historical.packId : null;
+}
+
 async function scanInbox(admin: ReturnType<typeof createClient>, userId: string, maxResultsInput = 10) {
   const token = await accessToken(admin, userId);
   const maxResults = Math.min(Math.max(Number(maxResultsInput || 10), 1), 15);
@@ -323,12 +358,20 @@ async function scanInbox(admin: ReturnType<typeof createClient>, userId: string,
   for (const threadId of threadIds) {
     try {
       const messages = await loadThread(threadId, token);
-      results.push(await persistAssessment(admin, userId, messages, `https://mail.google.com/mail/u/0/#all/${threadId}`));
+      const sourceUrl = `https://mail.google.com/mail/u/0/#all/${threadId}`;
+      const current = await persistAssessment(admin, userId, messages, sourceUrl);
+      const retainedPackId = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl);
+      results.push({ ...current, retainedPackId });
     } catch (error) {
       results.push({ threadId, error: error instanceof Error ? error.message : "Unable to assess thread." });
     }
   }
-  return { checked: threadIds.length, prepared: results.filter((result: any) => Boolean(result.packId)).length, results };
+  return {
+    checked: threadIds.length,
+    prepared: results.filter((result: any) => Boolean(result.packId)).length,
+    retained: results.filter((result: any) => Boolean(result.retainedPackId)).length,
+    results,
+  };
 }
 
 async function generateBrief(admin: ReturnType<typeof createClient>, userId: string) {
@@ -339,7 +382,7 @@ async function generateBrief(admin: ReturnType<typeof createClient>, userId: str
     .from("action_packs")
     .select("id,title,executive_summary,attention_level,review_by,contact_name,organisation_name,status,action_items(id,approval_status)")
     .eq("user_id", userId)
-    .in("status", ["ready_for_review", "approved", "executing", "failed"])
+    .in("status", ["ready_for_review", "executing", "failed"])
     .or(`snoozed_until.is.null,snoozed_until.lte.${now.toISOString()}`)
     .order("created_at", { ascending: false })
     .limit(20);
