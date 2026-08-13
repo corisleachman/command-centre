@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  BellRing,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -35,8 +36,18 @@ import { proposeDailyPlan, type DailyPlanBlock } from "../../lib/v2-daily-intell
 import { loadCrmOpportunities, type CrmOpportunity } from "../../lib/v2-crm";
 import { callGmail, GMAIL_READONLY_SCOPE, type GmailActionMessage, type GmailInboxResult } from "../../lib/v2-gmail";
 import { buildProactiveRecommendations } from "../../lib/v2-recommendations";
+import {
+  attentionLabel,
+  executiveAgentUnavailable,
+  loadExecutiveActionPacks,
+  loadTodaysExecutiveBrief,
+  syncExecutiveInbox,
+  type ExecutiveActionPack,
+  type ExecutiveBrief,
+} from "../../lib/v2-executive-agent";
 import CreateTaskModal from "./components/CreateTaskModal";
 import styles from "./v2.module.css";
+import executiveStyles from "./executive-alert.module.css";
 
 const emptyWorkspace: V2Workspace = { initiatives: [], unassignedTasks: [], todayTasks: [], allTasks: [] };
 
@@ -57,6 +68,8 @@ export default function V2Page() {
   const [events, setEvents] = useState<GoogleCalendarEvent[]>([]);
   const [crm, setCrm] = useState<CrmOpportunity[]>([]);
   const [gmail, setGmail] = useState<GmailActionMessage[]>([]);
+  const [executivePacks, setExecutivePacks] = useState<ExecutiveActionPack[]>([]);
+  const [morningBrief, setMorningBrief] = useState<ExecutiveBrief | null>(null);
   const [signalsLoading, setSignalsLoading] = useState(false);
   const [proposal, setProposal] = useState<DailyPlanBlock[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,6 +80,7 @@ export default function V2Page() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [showNewTask, setShowNewTask] = useState(false);
+  const executiveScanStarted = useRef(false);
   const today = localDateInput();
 
   useEffect(() => {
@@ -110,14 +124,33 @@ export default function V2Page() {
     if (!supabase || !user) return;
     setLoading(true);
     try {
-      const [nextWorkspace, nextStatus] = await Promise.all([
+      const executiveRequest = loadExecutiveActionPacks(supabase, user.id, { limit: 8 }).catch(reason => {
+        if (!executiveAgentUnavailable(reason)) throw reason;
+        return [];
+      });
+      const briefRequest = loadTodaysExecutiveBrief(supabase, user.id).catch(reason => {
+        if (!executiveAgentUnavailable(reason)) throw reason;
+        return null;
+      });
+      const [nextWorkspace, nextStatus, nextExecutivePacks, nextBrief] = await Promise.all([
         loadV2Workspace(supabase, user.id),
         loadCalendarStatus(supabase, user.id),
+        executiveRequest,
+        briefRequest,
       ]);
       setWorkspace(nextWorkspace);
       setCalendarStatus(nextStatus);
+      setExecutivePacks(nextExecutivePacks);
+      setMorningBrief(nextBrief);
       setError("");
       void loadExternalSignals(nextStatus);
+      if (!executiveScanStarted.current && nextStatus?.granted_scopes?.includes(GMAIL_READONLY_SCOPE)) {
+        executiveScanStarted.current = true;
+        void syncExecutiveInbox(supabase, 8)
+          .then(() => Promise.all([loadExecutiveActionPacks(supabase, user.id, { limit: 8 }), loadTodaysExecutiveBrief(supabase, user.id)]))
+          .then(([packs, brief]) => { setExecutivePacks(packs); setMorningBrief(brief); })
+          .catch(() => { /* Shadow-mode inbox checks must never block Today. */ });
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load Today.");
     } finally {
@@ -175,6 +208,10 @@ export default function V2Page() {
     .filter(event => !event.allDay && new Date(event.end).getTime() > Date.now())
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())[0] ?? null;
   const nextAction = visibleProactive[0] ?? null;
+  const importantChange = executivePacks.find(pack => pack.attentionLevel === "interrupt_now")
+    ?? executivePacks.find(pack => pack.attentionLevel === "top_of_today")
+    ?? null;
+  const preparedCount = executivePacks.reduce((sum, pack) => sum + pack.items.filter(item => item.approvalStatus === "pending").length, 0);
   const revenueAction = intelligence.recommendations.find(item => item.task.category === "cash") ?? null;
   const overdueCount = activeTasks.filter(task => task.dueOn && task.dueOn < today).length;
   const inboxCount = workspace.unassignedTasks.filter(task => task.status !== "complete" && task.status !== "cancelled").length;
@@ -259,6 +296,13 @@ export default function V2Page() {
     {progress && <div className={styles.infoCard}><Clock3 size={17} /> {progress}</div>}
 
     {!loading && <>
+      {importantChange && <section className={executiveStyles.executiveAlert}>
+        <div className={executiveStyles.executiveAlertIcon}><BellRing size={21} /></div>
+        <div><span className={`${styles.kicker} ${executiveStyles.alertKicker}`}>{attentionLabel(importantChange.attentionLevel)}</span><h2>{importantChange.title}</h2><p>{importantChange.executiveSummary}</p>{importantChange.whyNow && <small>{importantChange.whyNow}</small>}</div>
+        <Link href={`/v2/attention?pack=${importantChange.id}`}>Review {importantChange.items.length ? `${importantChange.items.length} prepared item${importantChange.items.length === 1 ? "" : "s"}` : "change"} <ArrowRight size={16} /></Link>
+      </section>}
+      {!importantChange && preparedCount > 0 && <section className={executiveStyles.preparedStrip}><span><Sparkles size={17} /><strong>{preparedCount} prepared action{preparedCount === 1 ? " is" : "s are"} waiting for approval</strong></span><Link href="/v2/attention">Review prepared work <ArrowRight size={15} /></Link></section>}
+      {!importantChange && preparedCount === 0 && morningBrief && morningBrief.content.can_wait.length > 0 && <section className={executiveStyles.preparedStrip}><span><BellRing size={17} /><strong>{morningBrief.title}</strong></span><Link href="/v2/attention">Open morning brief <ArrowRight size={15} /></Link></section>}
       <section className={styles.commandGrid}>
         <article className={styles.bigThreeCard}>
           <div className={styles.cardHeading}><div><span className={styles.kicker}>BIG THREE</span><h2>Nothing Else Matters</h2></div><span>{bigThree.length}/3</span></div>
