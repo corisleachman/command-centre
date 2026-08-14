@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  AlertTriangle,
   BellRing,
   Check,
   CheckCircle2,
@@ -35,6 +36,16 @@ import {
   type ExecutiveFeedbackType,
 } from "../../../lib/v2-executive-agent";
 import styles from "./attention.module.css";
+import noticeStyles from "./attention-notice.module.css";
+
+type ActionNotice = {
+  tone: "error" | "success";
+  title: string;
+  message: string;
+  itemId?: string;
+  href?: string;
+  hrefLabel?: string;
+};
 
 function formattedDate(value: string | null) {
   if (!value) return "No fixed deadline";
@@ -98,6 +109,24 @@ function resultLink(item: ExecutiveActionItem) {
   return null;
 }
 
+function failureTitle(item: ExecutiveActionItem) {
+  if (item.actionType === "document_draft") return "Document wasn't created";
+  if (item.actionType === "reply_draft") return "Email wasn't sent";
+  if (item.actionType === "task_create") return "Task wasn't created";
+  return "The action couldn't be completed";
+}
+
+function successTitle(item: ExecutiveActionItem) {
+  if (item.actionType === "document_draft") return "Document created";
+  if (item.actionType === "reply_draft") return "Email sent";
+  if (item.actionType === "task_create") return "Task created";
+  return "Action completed";
+}
+
+function reconnectNeeded(message: string) {
+  return /reconnect Google|Google Drive permission is incomplete|connection has expired|connection has been revoked/i.test(message);
+}
+
 function isActivePack(pack: ExecutiveActionPack) {
   if (["ready_for_review", "executing", "failed"].includes(pack.status)) return true;
   return pack.status === "approved" && pack.items.some(item => executesOnApproval(item) && item.executionStatus !== "completed");
@@ -114,6 +143,17 @@ export default function AttentionCentrePage() {
   const [message, setMessage] = useState("");
   const [notDeployed, setNotDeployed] = useState(false);
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
+  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null);
+  const noticeRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    noticeRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setActionNotice(null); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => { window.removeEventListener("keydown", closeOnEscape); previous?.focus(); };
+  }, [actionNotice]);
 
   useEffect(() => {
     if (!supabase) { setError("Supabase is not configured for this deployment."); setLoading(false); return; }
@@ -132,9 +172,9 @@ export default function AttentionCentrePage() {
     return () => { active = false; listener.subscription.unsubscribe(); };
   }, []);
 
-  async function load() {
-    if (!supabase || !user) return;
-    setLoading(true);
+  async function load(showLoading = true): Promise<ExecutiveActionPack[]> {
+    if (!supabase || !user) return [];
+    if (showLoading) setLoading(true);
     setError("");
     try {
       await supabase.rpc("seed_executive_agent_rules", { p_user_id: user.id });
@@ -152,6 +192,7 @@ export default function AttentionCentrePage() {
       const prepared: Record<string, string> = {};
       next.forEach(pack => pack.items.forEach(item => { prepared[item.id] = preparedText(item); }));
       setDrafts(prepared);
+      return next;
     } catch (reason) {
       if (executiveAgentUnavailable(reason)) {
         setNotDeployed(true);
@@ -159,8 +200,9 @@ export default function AttentionCentrePage() {
       } else {
         setError(reason instanceof Error ? reason.message : "Unable to load prepared actions.");
       }
+      return [];
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }
 
@@ -173,6 +215,15 @@ export default function AttentionCentrePage() {
     .sort((left, right) => Date.parse(right.updatedAt || right.createdAt) - Date.parse(left.updatedAt || left.createdAt));
   const recentHistory = historyPacks.slice(0, 5);
   const selectedIsActive = selected ? isActivePack(selected) : false;
+
+  function showAction(itemId: string) {
+    setActionNotice(null);
+    window.setTimeout(() => {
+      const target = document.getElementById(`executive-action-${itemId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.focus({ preventScroll: true });
+    }, 80);
+  }
 
   async function selectPack(pack: ExecutiveActionPack) {
     setSelectedId(pack.id);
@@ -196,6 +247,7 @@ export default function AttentionCentrePage() {
     setBusy(item.id);
     setError("");
     setMessage("");
+    setActionNotice(null);
     setItemErrors(current => ({ ...current, [item.id]: "" }));
     let approved = item.approvalStatus === "approved";
     try {
@@ -208,16 +260,33 @@ export default function AttentionCentrePage() {
       }
       if (executesOnApproval(item)) {
         const result = await executeApprovedExecutiveActionItem(supabase, item.id);
-        setMessage(result.message);
+        await load(false);
+        setActionNotice({
+          tone: "success",
+          title: successTitle(item),
+          message: result.message,
+          itemId: item.id,
+          href: item.actionType === "document_draft" && result.externalReference?.startsWith("http") ? result.externalReference : undefined,
+          hrefLabel: item.actionType === "document_draft" ? "Open document" : undefined,
+        });
       } else {
         setMessage("Approved. Your decision and the exact reviewed version have been recorded. This action has not changed an external system.");
+        await load(false);
       }
-      await load();
     } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "Unable to complete this action.";
+      const initialDetail = reason instanceof Error ? reason.message : "Unable to complete this action.";
+      const refreshed = await load(false);
+      const persistedDetail = refreshed.flatMap(pack => pack.items).find(current => current.id === item.id)?.lastError;
+      const detail = persistedDetail || initialDetail;
       setItemErrors(current => ({ ...current, [item.id]: detail }));
-      setError(`${approved ? "Approved, but execution failed" : "Approval failed"}: ${detail}`);
-      await load();
+      setActionNotice({
+        tone: "error",
+        title: approved ? failureTitle(item) : "Approval wasn't recorded",
+        message: detail,
+        itemId: item.id,
+        href: reconnectNeeded(detail) ? "/v2/gmail" : undefined,
+        hrefLabel: reconnectNeeded(detail) ? "Update Google connection" : undefined,
+      });
     } finally {
       setBusy("");
     }
@@ -230,11 +299,11 @@ export default function AttentionCentrePage() {
     setMessage("");
     try {
       const result = await syncExecutiveInbox(supabase, 15);
-      await load();
+      await load(false);
       const recovered = result.retained ? ` ${result.retained} replied conversation${result.retained === 1 ? " was" : "s were"} updated so the remaining follow-on work stays available.` : "";
       setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.${recovered}`);
     } catch (reason) {
-      setError(reason instanceof Error ? `Gmail recheck failed: ${reason.message}` : "Gmail recheck failed.");
+      setActionNotice({ tone: "error", title: "Gmail recheck failed", message: reason instanceof Error ? reason.message : "The inbox couldn't be rechecked." });
     } finally {
       setBusy("");
     }
@@ -249,9 +318,9 @@ export default function AttentionCentrePage() {
     try {
       await snoozeExecutivePack(supabase, user.id, pack.id, tomorrow.toISOString());
       setMessage("Snoozed until tomorrow morning.");
-      await load();
+      await load(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to snooze this action.");
+      setActionNotice({ tone: "error", title: "This couldn't be snoozed", message: reason instanceof Error ? reason.message : "Unable to snooze this action." });
     } finally { setBusy(""); }
   }
 
@@ -263,9 +332,9 @@ export default function AttentionCentrePage() {
     try {
       await dismissExecutivePack(supabase, user.id, pack.id, reason);
       setMessage("Dismissed and retained as feedback.");
-      await load();
+      await load(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to dismiss this action.");
+      setActionNotice({ tone: "error", title: "This couldn't be dismissed", message: caught instanceof Error ? caught.message : "Unable to dismiss this action." });
     } finally { setBusy(""); }
   }
 
@@ -276,13 +345,25 @@ export default function AttentionCentrePage() {
       await submitExecutiveFeedback(supabase, user.id, pack, feedbackType);
       setMessage("Feedback recorded. It will inform tuning, but it will not silently rewrite your operating rules.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to record feedback.");
+      setActionNotice({ tone: "error", title: "Feedback wasn't recorded", message: reason instanceof Error ? reason.message : "Unable to record feedback." });
     } finally { setBusy(""); }
   }
 
   if (!user && !loading) return <main className={styles.authPage}><div className={styles.authCard}><BellRing /><h1>Sign in first</h1><p>The Attention Centre uses your existing private Command Centre session.</p><Link href="/">Open Command Centre</Link></div></main>;
 
   return <main className={styles.page}>
+    {actionNotice && <div className={noticeStyles.noticeBackdrop} onMouseDown={event => { if (event.currentTarget === event.target) setActionNotice(null); }}>
+      <section ref={noticeRef} className={`${noticeStyles.actionNotice} ${actionNotice.tone === "error" ? noticeStyles.errorNotice : noticeStyles.successNotice}`} role="alertdialog" aria-modal="true" aria-labelledby="action-notice-title" tabIndex={-1}>
+        <button className={noticeStyles.noticeClose} onClick={() => setActionNotice(null)} aria-label="Close message"><X size={18} /></button>
+        <span className={noticeStyles.noticeIcon}>{actionNotice.tone === "error" ? <AlertTriangle size={24} /> : <CheckCircle2 size={24} />}</span>
+        <div><small>{actionNotice.tone === "error" ? "ACTION NOT COMPLETED" : "ACTION COMPLETED"}</small><h2 id="action-notice-title">{actionNotice.title}</h2><p>{actionNotice.message}</p></div>
+        <footer>
+          {actionNotice.itemId && <button onClick={() => showAction(actionNotice.itemId!)}>Show action</button>}
+          {actionNotice.href && (actionNotice.href.startsWith("http") ? <a href={actionNotice.href} target="_blank" rel="noreferrer">{actionNotice.hrefLabel || "Open"} <ExternalLink size={15} /></a> : <Link href={actionNotice.href}>{actionNotice.hrefLabel || "Open"}</Link>)}
+          <button className={noticeStyles.noticeSecondary} onClick={() => setActionNotice(null)}>Close</button>
+        </footer>
+      </section>
+    </div>}
     <header className={styles.header}><div><Link href="/v2"><ArrowLeft size={16} /> Today</Link><span>EXECUTIVE AGENT</span><h1>Attention Centre</h1><p>Important changes, interpreted and prepared before they reach you.</p></div><div className={styles.headerActions}><button onClick={() => void recheckGmail()} disabled={Boolean(busy)}><RefreshCw size={15} /> {busy === "recheck" ? "Checking…" : "Recheck Gmail"}</button><div className={styles.trust}><ShieldCheck size={18} /><span><strong>Prepare by default</strong><small>External action requires approval</small></span></div></div></header>
 
     {loading && <div className={styles.state}>Loading prepared work...</div>}
@@ -309,10 +390,10 @@ export default function AttentionCentrePage() {
           {selected.missingFacts.length > 0 && <section className={styles.missing}><strong>{selectedIsActive ? "Still needs your judgement" : "Judgement notes at the time"}</strong>{selected.missingFacts.map(fact => <span key={fact}>{fact}</span>)}</section>}
 
           <section className={styles.items}><div className={styles.sectionHeading}><div><span>{selectedIsActive ? "PREPARED FOR APPROVAL" : "HISTORICAL PREPARED WORK"}</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} {selectedIsActive ? "ready" : "retained"}</h3></div>{selectedIsActive && <small>Approve items separately</small>}</div>
-            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.executionStatus === "cancelled" ? "no longer needed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || item.executionStatus === "cancelled" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article key={item.id} className={styles.itemCard}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
+            {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const inlineError = itemErrors[item.id] || item.lastError; const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.executionStatus === "cancelled" ? "no longer needed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || item.executionStatus === "cancelled" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article id={`executive-action-${item.id}`} key={item.id} className={`${styles.itemCard} ${noticeStyles.actionAnchor}`} tabIndex={-1}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
               {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved" || item.executionStatus === "cancelled"} />}
               {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
-              {itemErrors[item.id] && <p className={styles.error} role="alert">{itemErrors[item.id]}</p>}
+              {inlineError && <p className={styles.error} role="alert">{inlineError}</p>}
               <div className={styles.itemFooter}><span>{selectedIsActive ? approvalBoundary(item) : "Retained for reference. This version can no longer be approved."}</span><div>{link && <Link href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined}>{link.label} <ExternalLink size={15} /></Link>}{selectedIsActive && <button onClick={() => void approveAndExecute(item)} disabled={Boolean(busy) || item.executionStatus === "completed" || item.executionStatus === "executing" || item.executionStatus === "cancelled" || (!executesOnApproval(item) && item.approvalStatus === "approved")}><Check size={16} /> {actionButtonLabel(item, busy === item.id)}</button>}</div></div>
             </article>; })}
           </section>
