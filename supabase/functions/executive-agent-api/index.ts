@@ -164,6 +164,19 @@ function textValue(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function explainGoogleDocumentFailure(status: number, detail: string) {
+  if (/accessNotConfigured|SERVICE_DISABLED|API has not been used|is disabled/i.test(detail)) {
+    return "Google Drive or Google Docs isn't enabled for the Google Cloud project connected to Command Centre. Enable both APIs, then retry document creation.";
+  }
+  if (/ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|insufficient Permission/i.test(detail)) {
+    return "Google Drive permission is incomplete. Reconnect Google from the Gmail page, approve the requested Drive permission, then retry document creation.";
+  }
+  if (/invalid_grant|Token has been expired or revoked/i.test(detail)) {
+    return "The Google connection has expired or been revoked. Reconnect Google from the Gmail page, then retry document creation.";
+  }
+  return `Google document creation failed (${status}). ${detail}`;
+}
+
 function encodeBase64Url(value: string) {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -251,7 +264,7 @@ async function createApprovedDocument(accessTokenValue: string, content: Record<
       appProperties: { commandCentreActionItemId: actionItemId },
     }),
   });
-  if (!createResponse.ok) throw new Error(`Google Drive creation failed (${createResponse.status}): ${await createResponse.text()}`);
+  if (!createResponse.ok) throw new Error(explainGoogleDocumentFailure(createResponse.status, await createResponse.text()));
   const file = await createResponse.json();
 
   const writeResponse = await fetch(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(file.id)}:batchUpdate`, {
@@ -261,7 +274,7 @@ async function createApprovedDocument(accessTokenValue: string, content: Record<
   });
   if (!writeResponse.ok) {
     await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}`, { method: "DELETE", headers: { Authorization: `Bearer ${accessTokenValue}` } });
-    throw new Error(`Google Docs writing failed (${writeResponse.status}): ${await writeResponse.text()}`);
+    throw new Error(explainGoogleDocumentFailure(writeResponse.status, await writeResponse.text()));
   }
   const reference = stringValue(file.webViewLink) || `https://docs.google.com/document/d/${file.id}/edit`;
   return { reference, message: `Private Google Doc created: ${title}.` };
@@ -331,9 +344,16 @@ async function executeApprovedAction(admin: ReturnType<typeof createClient>, use
   if (!pack || !["ready_for_review", "approved", "executing", "failed"].includes(pack.status)) throw new Error("This action pack is no longer executable.");
   if (!approval) throw new Error("The immutable approval record is missing.");
 
+  console.info("[executive-agent] approved execution starting", { userId, actionItemId, actionType: item.action_type });
+
   let googleToken: string | null = null;
-  if (item.action_type === "reply_draft") googleToken = await accessToken(admin, userId, [GMAIL_SEND_SCOPE]);
-  if (item.action_type === "document_draft") googleToken = await accessToken(admin, userId, [DRIVE_FILE_SCOPE]);
+  try {
+    if (item.action_type === "reply_draft") googleToken = await accessToken(admin, userId, [GMAIL_SEND_SCOPE]);
+    if (item.action_type === "document_draft") googleToken = await accessToken(admin, userId, [DRIVE_FILE_SCOPE]);
+  } catch (error) {
+    console.error("[executive-agent] approved execution preflight failed", { userId, actionItemId, actionType: item.action_type, detail: error instanceof Error ? error.message : "Google connection preflight failed." });
+    throw error;
+  }
 
   const { data: claimed, error: claimError } = await admin.from("action_items").update({ execution_status: "executing", last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).in("execution_status", ["not_started", "failed"]).select("id").maybeSingle();
   if (claimError) throw claimError;
@@ -357,9 +377,11 @@ async function executeApprovedAction(admin: ReturnType<typeof createClient>, use
     const { error: completionError } = await admin.from("action_items").update({ execution_status: "completed", executed_at: new Date().toISOString(), external_result_reference: externalReference, last_error: null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).eq("execution_status", "executing");
     if (completionError) throw completionError;
     await settlePackStatus(admin, userId, pack.id);
+    console.info("[executive-agent] approved execution completed", { userId, actionItemId, actionType: item.action_type, externalReference });
     return { status: "completed" as const, actionType: item.action_type, externalReference, message: result.message };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Approved action execution failed.";
+    console.error("[executive-agent] approved execution failed", { userId, actionItemId, actionType: item.action_type, externalActionCompleted: Boolean(externalReference), detail });
     if (!externalReference) {
       await admin.from("action_items").update({ execution_status: "failed", last_error: detail, updated_at: new Date().toISOString() }).eq("id", item.id).eq("user_id", userId).eq("execution_status", "executing");
       await settlePackStatus(admin, userId, pack.id);
