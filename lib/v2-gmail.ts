@@ -2,11 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+export const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const GOOGLE_COMMAND_CENTRE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   GMAIL_READONLY_SCOPE,
   GMAIL_SEND_SCOPE,
+  DRIVE_FILE_SCOPE,
 ];
 
 export type GmailActionMessage = {

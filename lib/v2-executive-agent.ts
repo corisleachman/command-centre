@@ -21,6 +21,8 @@ export type ExecutiveActionItem = {
   approvalRequired: boolean;
   approvalStatus: "pending" | "approved" | "rejected" | "not_required";
   executionStatus: "not_started" | "queued" | "executing" | "completed" | "failed" | "cancelled";
+  externalResultReference: string | null;
+  lastError: string | null;
   position: number;
 };
 
@@ -92,16 +94,29 @@ function asRows(value: unknown) { return Array.isArray(value) ? value.filter(ite
 function asStrings(value: unknown) { return Array.isArray(value) ? value.filter(item => typeof item === "string") as string[] : []; }
 
 function parseItem(row: Row): ExecutiveActionItem {
+  const approvals = asRows(row.approvals).sort((left, right) => asString(right.decided_at).localeCompare(asString(left.decided_at)));
+  const latestAmendments = approvals[0]?.amendments && typeof approvals[0].amendments === "object" ? approvals[0].amendments as Record<string, unknown> : {};
+  const content = row.content && typeof row.content === "object" ? { ...row.content as Record<string, unknown> } : {};
+  const hasApprovedText = Object.prototype.hasOwnProperty.call(latestAmendments, "prepared_text");
+  const approvedText = asString(latestAmendments.prepared_text);
+  if (hasApprovedText) {
+    const actionType = asString(row.action_type);
+    if (actionType === "reply_draft") content.body = approvedText;
+    else if (actionType === "document_draft" || actionType === "meeting_brief") content.markdown = approvedText;
+    else content.text = approvedText;
+  }
   return {
     id: asString(row.id),
     actionType: asString(row.action_type) as ExecutiveActionType,
     title: asString(row.title),
-    content: row.content && typeof row.content === "object" ? row.content as Record<string, unknown> : {},
+    content,
     contentVersion: asNumber(row.content_version),
     contentHash: asString(row.content_hash),
     approvalRequired: asBoolean(row.approval_required),
     approvalStatus: asString(row.approval_status) as ExecutiveActionItem["approvalStatus"],
     executionStatus: asString(row.execution_status) as ExecutiveActionItem["executionStatus"],
+    externalResultReference: asNullableString(row.external_result_reference),
+    lastError: asNullableString(row.last_error),
     position: asNumber(row.position),
   };
 }
@@ -157,7 +172,7 @@ export async function loadExecutiveActionPacks(
       contact_name,organisation_name,source_url,missing_facts,proposed_changes,confidence,
       read_at,snoozed_until,created_at,updated_at,
       assessment:attention_assessments(category,summary,previous_state,new_state,changes,explicit_requests,evidence,consequence_of_delay,attention_score),
-      items:action_items(id,action_type,title,content,content_version,content_hash,approval_required,approval_status,execution_status,position)
+      items:action_items(id,action_type,title,content,content_version,content_hash,approval_required,approval_status,execution_status,external_result_reference,last_error,position,approvals:action_approvals(amendments,decided_at))
     `)
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
@@ -235,6 +250,13 @@ export async function approveExecutiveActionItem(client: SupabaseClient, item: E
   });
   if (error) throw error;
   return data;
+}
+
+export async function executeApprovedExecutiveActionItem(client: SupabaseClient, itemId: string) {
+  const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "executeApprovedAction", itemId } });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data as { status: "completed"; actionType: ExecutiveActionType; externalReference: string | null; message: string };
 }
 
 export async function submitExecutiveFeedback(

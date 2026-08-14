@@ -11,7 +11,20 @@ The Executive Agent foundation turns connected Gmail conversations into auditabl
 5. The Attention Centre lets Coris edit and approve each prepared action separately.
 6. External actions remain unexecuted until a later controlled execution slice.
 
-The agent runs in shadow mode. It records assessments and prepares work, but it does not send email, schedule meetings, change opportunities or replace Big Three tasks.
+The agent prepares every action before it commits anything. Supported actions can then be executed only by a signed-in user approving the exact reviewed version. The first controlled-execution slice supports approved Gmail replies, private Google Doc creation and Command Centre task creation. Opportunity changes and follow-up triggers remain approval-only.
+
+## Controlled execution boundary
+
+- A document draft exists only inside the action pack until Coris selects **Approve and create document**.
+- Document approval creates one private Google Doc through the narrow `drive.file` scope. It does not share the file and cannot read unrelated Drive files.
+- Email approval sends the exact reviewed recipient, subject and body through the existing `gmail.send` scope.
+- Task approval creates one idempotent Command Centre task linked to the action item.
+- A stale or missing immutable approval cannot execute.
+- Completed actions retain their external reference for audit and access from Recent history.
+- If Coris replies directly in Gmail, the reply draft is marked handled while prepared follow-on decisions remain available.
+- Sharing documents, changing CRM opportunities and activating follow-up automation are not enabled in this slice.
+
+After deployment, reconnect Google once from `/v2/gmail` to grant the additional `https://www.googleapis.com/auth/drive.file` scope before testing document creation.
 
 ## Deploy order
 
@@ -118,4 +131,3 @@ the expected result is:
 - Modified content invalidates a stale approval.
 - The service role and connector tokens remain server-side.
 - Dismissed assessments remain available as tuning evidence.
-

@@ -11,7 +11,7 @@ import { supabase } from "../../../lib/supabase";
 import { loadV2Workspace, type V2Workspace } from "../../../lib/v2-data";
 import { callCalendar, loadCalendarStatus } from "../../../lib/v2-calendar";
 import {
-  callGmail, GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE, GOOGLE_COMMAND_CENTRE_SCOPES,
+  callGmail, DRIVE_FILE_SCOPE, GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE, GOOGLE_COMMAND_CENTRE_SCOPES,
   type GmailActionMessage, type GmailInboxResult, type GmailReplySuggestion,
   type GmailSendResult, type GmailThreadResult,
 } from "../../../lib/v2-gmail";
@@ -58,6 +58,7 @@ export default function GmailActionCapturePage() {
   const [accountEmail, setAccountEmail] = useState("");
   const [gmailConnected, setGmailConnected] = useState(false);
   const [gmailSendConnected, setGmailSendConnected] = useState(false);
+  const [driveFileConnected, setDriveFileConnected] = useState(false);
   const [filter, setFilter] = useState<FilterMode>("action");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<GmailActionMessage | null>(null);
@@ -105,6 +106,7 @@ export default function GmailActionCapturePage() {
       const hasGmail = scopes.includes(GMAIL_READONLY_SCOPE);
       setGmailConnected(hasGmail);
       setGmailSendConnected(scopes.includes(GMAIL_SEND_SCOPE));
+      setDriveFileConnected(scopes.includes(DRIVE_FILE_SCOPE));
       setError("");
       if (hasGmail) await loadInbox();
     } catch (reason) {
@@ -356,14 +358,14 @@ export default function GmailActionCapturePage() {
     {message && <div className={styles.success}><CheckCircle2 size={17} /> {message}</div>}
 
     {loading ? <section className={styles.loading}>Loading Gmail action capture…</section> : !gmailConnected ?
-      <section className={styles.connectCard}><Mail size={34} /><h2>Connect Gmail</h2><p>Google will ask for permission to read Gmail and send messages you explicitly approve in Command Centre. It does not grant delete, archive or mailbox-management access.</p><button onClick={() => void connectGmail()}><Link2 size={17} /> Connect Gmail</button></section>
+      <section className={styles.connectCard}><Mail size={34} /><h2>Connect Google</h2><p>Google will ask for permission to read Gmail, send messages you explicitly approve and create private Drive files you explicitly approve. It does not grant delete, archive, mailbox-management or access to files the Command Centre did not create.</p><button onClick={() => void connectGmail()}><Link2 size={17} /> Connect Google</button></section>
       : <>
-        {!gmailSendConnected && <section className={styles.permissionBanner}><div><strong>Reply and send are not enabled yet.</strong><span>Your current connection is read-only. Add Gmail send permission to work entirely from this dashboard.</span></div><button onClick={() => void connectGmail()}><Send size={16} /> Enable sending</button></section>}
+        {(!gmailSendConnected || !driveFileConnected) && <section className={styles.permissionBanner}><div><strong>Approved actions need one connection update.</strong><span>Add the missing permission to send explicitly approved emails and create explicitly approved private Google Docs.</span></div><button onClick={() => void connectGmail()}><Send size={16} /> Update Google permissions</button></section>}
 
         <section className={styles.summaryGrid}>
           <article><span>LIKELY ACTIONS</span><strong>{actionCount}</strong><small>Recent emails with stronger action signals</small></article>
           <article><span>CAPTURED</span><strong>{capturedCount}</strong><small>Email threads already linked to tasks</small></article>
-          <article><span>ACCOUNT</span><strong className={styles.account}>{accountEmail || "Connected Gmail"}</strong><small>{gmailSendConnected ? "Read + send enabled" : "Read-only connection"}</small></article>
+          <article><span>ACCOUNT</span><strong className={styles.account}>{accountEmail || "Connected Gmail"}</strong><small>{gmailSendConnected && driveFileConnected ? "Read, approved send and approved document creation enabled" : gmailSendConnected ? "Read + send enabled" : "Read-only connection"}</small></article>
         </section>
 
         <section className={styles.toolbar}>
