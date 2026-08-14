@@ -1,0 +1,109 @@
+.noticeBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 31, 23, .42);
+  backdrop-filter: blur(4px);
+  animation: noticeFade .18s ease-out;
+}
+
+.actionNotice {
+  position: relative;
+  width: min(560px, calc(100vw - 32px));
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #d8e0d9;
+  border-radius: 22px;
+  padding: 28px;
+  box-shadow: 0 28px 90px rgba(17, 28, 20, .28);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+  outline: 0;
+  animation: noticeRise .22s ease-out;
+}
+
+.errorNotice { border-color: #e5b8b3; }
+.successNotice { border-color: #bddcc5; }
+
+.noticeIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+}
+
+.errorNotice .noticeIcon { background: #fff0ef; color: #983830; }
+.successNotice .noticeIcon { background: #e9f6ed; color: #28653a; }
+.actionNotice small { font-size: .68rem; font-weight: 850; letter-spacing: .14em; color: #78837b; }
+.actionNotice h2 { font-size: 1.55rem; line-height: 1.1; margin: 6px 36px 8px 0; }
+.actionNotice p { margin: 0; color: #5f6b62; line-height: 1.55; overflow-wrap: anywhere; }
+
+.noticeClose {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: #eef2ef;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.actionNotice footer {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.actionNotice footer button,
+.actionNotice footer a {
+  border: 0;
+  border-radius: 10px;
+  background: #1d2b22;
+  color: #fff;
+  padding: 10px 13px;
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 800;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.actionNotice footer .noticeSecondary { background: #eef2ef; color: #2b382f; }
+.actionAnchor:focus { outline: 3px solid rgba(51, 121, 70, .24); outline-offset: 5px; }
+
+@keyframes noticeFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes noticeRise {
+  from { opacity: 0; transform: translateY(18px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 560px) {
+  .actionNotice { grid-template-columns: 1fr; padding: 22px; }
+  .noticeIcon { width: 42px; height: 42px; }
+  .actionNotice footer { grid-column: 1; display: grid; }
+  .actionNotice footer > * { width: 100%; box-sizing: border-box; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .noticeBackdrop,
+  .actionNotice { animation: none; }
+}

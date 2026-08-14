@@ -93,6 +93,24 @@ function asBoolean(value: unknown) { return value === true; }
 function asRows(value: unknown) { return Array.isArray(value) ? value.filter(item => item && typeof item === "object") as Row[] : []; }
 function asStrings(value: unknown) { return Array.isArray(value) ? value.filter(item => typeof item === "string") as string[] : []; }
 
+async function functionErrorMessage(error: unknown, data: unknown) {
+  if (data && typeof data === "object" && typeof (data as { error?: unknown }).error === "string") return (data as { error: string }).error;
+  const context = (error as { context?: Response } | null)?.context;
+  if (context instanceof Response) {
+    try {
+      const payload = await context.clone().json() as { error?: unknown; message?: unknown };
+      if (typeof payload.error === "string" && payload.error) return payload.error;
+      if (typeof payload.message === "string" && payload.message) return payload.message;
+    } catch {
+      try {
+        const detail = (await context.clone().text()).trim();
+        if (detail) return detail;
+      } catch { /* Fall through to the client error below. */ }
+    }
+  }
+  return error instanceof Error ? error.message : "The server action failed without an explanation.";
+}
+
 function parseItem(row: Row): ExecutiveActionItem {
   const approvals = asRows(row.approvals).sort((left, right) => asString(right.decided_at).localeCompare(asString(left.decided_at)));
   const latestAmendments = approvals[0]?.amendments && typeof approvals[0].amendments === "object" ? approvals[0].amendments as Record<string, unknown> : {};
@@ -212,14 +230,14 @@ export async function loadTodaysExecutiveBrief(client: SupabaseClient, userId: s
 
 export async function prepareExecutiveThread(client: SupabaseClient, threadId: string) {
   const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "prepareThread", threadId } });
-  if (error) throw error;
+  if (error) throw new Error(await functionErrorMessage(error, data));
   if (data?.error) throw new Error(data.error);
   return data as { eventId: string; assessmentId: string; packId: string | null; assessment: { summary: string; attentionLevel: ExecutiveAttentionLevel } };
 }
 
 export async function syncExecutiveInbox(client: SupabaseClient, maxResults = 10) {
   const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "scanInbox", maxResults } });
-  if (error) throw error;
+  if (error) throw new Error(await functionErrorMessage(error, data));
   if (data?.error) throw new Error(data.error);
   return data as { checked: number; prepared: number; retained: number };
 }
@@ -254,7 +272,7 @@ export async function approveExecutiveActionItem(client: SupabaseClient, item: E
 
 export async function executeApprovedExecutiveActionItem(client: SupabaseClient, itemId: string) {
   const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "executeApprovedAction", itemId } });
-  if (error) throw error;
+  if (error) throw new Error(await functionErrorMessage(error, data));
   if (data?.error) throw new Error(data.error);
   return data as { status: "completed"; actionType: ExecutiveActionType; externalReference: string | null; message: string };
 }
