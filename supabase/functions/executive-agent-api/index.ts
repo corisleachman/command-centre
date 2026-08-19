@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { assessConversation, type ExecutiveSourceMessage } from "../_shared/executive-policy.ts";
+import { type ExecutiveSourceMessage } from "../_shared/executive-policy.ts";
+import { assessConversationWithIntelligence } from "../_shared/executive-intelligence.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -12,10 +13,11 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
 const TOKEN_KEY = Deno.env.get("CALENDAR_TOKEN_ENCRYPTION_KEY")!;
-const POLICY_VERSION = "revenue-ea-v2";
+const POLICY_VERSION = "revenue-ea-v3";
 const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -98,7 +100,13 @@ async function accessToken(admin: ReturnType<typeof createClient>, userId: strin
   const granted = connection.granted_scopes ?? [];
   const missing = requiredScopes.filter(scope => !granted.includes(scope));
   if (missing.length) {
-    const permission = missing.includes(DRIVE_FILE_SCOPE) ? "Google Drive file creation" : missing.includes(GMAIL_SEND_SCOPE) ? "Gmail sending" : "Gmail reading";
+    const permission = missing.includes(DRIVE_FILE_SCOPE)
+      ? "Google Drive file creation"
+      : missing.includes(CALENDAR_EVENTS_SCOPE)
+        ? "Google Calendar invitation"
+        : missing.includes(GMAIL_SEND_SCOPE)
+          ? "Gmail sending"
+          : "Gmail reading";
     throw new Error(`${permission} permission is not connected. Reconnect Google from the Gmail page and approve the requested permission.`);
   }
   const refreshToken = await decrypt(connection.encrypted_refresh_token);
@@ -315,6 +323,106 @@ async function createApprovedTask(admin: ReturnType<typeof createClient>, userId
   return { reference: `task:${task.id}`, message: `Task created: ${title}.` };
 }
 
+async function selectedCalendarId(admin: ReturnType<typeof createClient>, userId: string) {
+  const { data, error } = await admin
+    .from("google_calendar_connections")
+    .select("selected_calendar_id")
+    .eq("user_id", userId)
+    .single();
+  if (error) throw error;
+  return stringValue(data?.selected_calendar_id) || "primary";
+}
+
+async function calendarFetch(calendarId: string, path: string, accessTokenValue: string, init: RequestInit = {}) {
+  const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${accessTokenValue}`, ...(init.headers ?? {}) },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    if (/ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|insufficient Permission/i.test(detail)) {
+      throw new Error("Google Calendar permission is incomplete. Reconnect Google from the Gmail page, approve Calendar access, then retry the invitation.");
+    }
+    if (/invalid_grant|Token has been expired or revoked/i.test(detail)) {
+      throw new Error("The Google connection has expired or been revoked. Reconnect Google from the Gmail page, then retry the invitation.");
+    }
+    throw new Error(`Google Calendar request failed (${response.status}): ${detail}`);
+  }
+  return response.json();
+}
+
+function calendarMoment(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+async function createApprovedCalendarInvite(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  accessTokenValue: string,
+  content: Record<string, unknown>,
+  actionItemId: string,
+  sourceUrl: string | null,
+) {
+  const eventTitle = stringValue(content.event_title) || stringValue(content.title) || "Meeting";
+  const attendeeEmail = stringValue(content.attendee_email).toLowerCase();
+  const attendeeName = stringValue(content.attendee_name);
+  const startsAt = stringValue(content.starts_at);
+  const endsAt = stringValue(content.ends_at);
+  const timezone = stringValue(content.timezone) || "Europe/London";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(attendeeEmail)) throw new Error("The approved invitation has an invalid attendee email address.");
+  const startTime = Date.parse(startsAt);
+  const endTime = Date.parse(endsAt);
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) throw new Error("The approved invitation has an invalid start or end time.");
+  if (startTime <= Date.now()) throw new Error("The approved meeting time is now in the past. Review the conversation and prepare a new time before creating the invitation.");
+
+  const calendarId = await selectedCalendarId(admin, userId);
+  const privateProperty = encodeURIComponent(`commandCentreActionItemId=${actionItemId}`);
+  const existing = await calendarFetch(calendarId, `/events?privateExtendedProperty=${privateProperty}&showDeleted=false&maxResults=1`, accessTokenValue);
+  const existingEvent = existing.items?.[0];
+  if (existingEvent) {
+    const reference = stringValue(existingEvent.htmlLink) || `https://calendar.google.com/calendar/event?eid=${encodeURIComponent(existingEvent.id || "")}`;
+    return { reference, message: `This diary invitation had already been created for ${attendeeEmail}. No duplicate was sent.` };
+  }
+
+  const conflicts = await calendarFetch(
+    calendarId,
+    `/events?singleEvents=true&showDeleted=false&orderBy=startTime&maxResults=10&timeMin=${encodeURIComponent(new Date(startTime).toISOString())}&timeMax=${encodeURIComponent(new Date(endTime).toISOString())}`,
+    accessTokenValue,
+  );
+  const blocking = (conflicts.items ?? []).find((event: any) => event.status !== "cancelled" && event.transparency !== "transparent");
+  if (blocking) {
+    const conflictTitle = stringValue(blocking.summary) || "another diary event";
+    throw new Error(`Diary conflict: ${conflictTitle} overlaps ${calendarMoment(startsAt, timezone)}. Nothing was created or sent. Review the time before trying again.`);
+  }
+
+  const created = await calendarFetch(calendarId, "/events?sendUpdates=all", accessTokenValue, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      summary: eventTitle,
+      description: [stringValue(content.description), sourceUrl ? `Source conversation: ${sourceUrl}` : ""].filter(Boolean).join("\n\n"),
+      start: { dateTime: startsAt, timeZone: timezone },
+      end: { dateTime: endsAt, timeZone: timezone },
+      attendees: [{ email: attendeeEmail, ...(attendeeName ? { displayName: attendeeName } : {}) }],
+      guestsCanInviteOthers: false,
+      guestsCanModify: false,
+      extendedProperties: { private: { commandCentreActionItemId: actionItemId } },
+    }),
+  });
+  const reference = stringValue(created.htmlLink) || `https://calendar.google.com/calendar/event?eid=${encodeURIComponent(created.id || "")}`;
+  return {
+    reference,
+    message: `Diary invitation created for ${attendeeName || attendeeEmail} on ${calendarMoment(startsAt, timezone)}. Google Calendar sent the invitation.`,
+  };
+}
+
 async function settlePackStatus(admin: ReturnType<typeof createClient>, userId: string, packId: string) {
   const { data: items, error } = await admin.from("action_items").select("approval_required,approval_status,execution_status").eq("user_id", userId).eq("action_pack_id", packId);
   if (error) throw error;
@@ -333,7 +441,7 @@ async function executeApprovedAction(admin: ReturnType<typeof createClient>, use
   if (item.execution_status === "completed") {
     return { status: "completed" as const, actionType: item.action_type, externalReference: item.external_result_reference, message: "This approved action has already been completed." };
   }
-  if (!["reply_draft", "document_draft", "task_create"].includes(item.action_type)) throw new Error("This action is approval-only in the current release.");
+  if (!["reply_draft", "document_draft", "calendar_proposal", "task_create"].includes(item.action_type)) throw new Error("This action is approval-only in the current release.");
 
   const [{ data: pack, error: packError }, { data: approval, error: approvalError }] = await Promise.all([
     admin.from("action_packs").select("id,event_id,status,source_url").eq("id", item.action_pack_id).eq("user_id", userId).maybeSingle(),
@@ -350,6 +458,7 @@ async function executeApprovedAction(admin: ReturnType<typeof createClient>, use
   try {
     if (item.action_type === "reply_draft") googleToken = await accessToken(admin, userId, [GMAIL_SEND_SCOPE]);
     if (item.action_type === "document_draft") googleToken = await accessToken(admin, userId, [DRIVE_FILE_SCOPE]);
+    if (item.action_type === "calendar_proposal") googleToken = await accessToken(admin, userId, [CALENDAR_EVENTS_SCOPE]);
   } catch (error) {
     console.error("[executive-agent] approved execution preflight failed", { userId, actionItemId, actionType: item.action_type, detail: error instanceof Error ? error.message : "Google connection preflight failed." });
     throw error;
@@ -370,6 +479,8 @@ async function executeApprovedAction(admin: ReturnType<typeof createClient>, use
       result = await sendApprovedEmail(googleToken!, content, threadId, item.id);
     } else if (item.action_type === "document_draft") {
       result = await createApprovedDocument(googleToken!, content, item.id);
+    } else if (item.action_type === "calendar_proposal") {
+      result = await createApprovedCalendarInvite(admin, userId, googleToken!, content, item.id, pack.source_url);
     } else {
       result = await createApprovedTask(admin, userId, content, item.id, pack.source_url);
     }
@@ -425,7 +536,8 @@ async function persistAssessment(
   sourceUrl: string,
 ) {
   if (!messages.length) throw new Error("No readable messages were found in this conversation.");
-  const assessment = assessConversation(messages);
+  const interpreted = await assessConversationWithIntelligence(messages);
+  const assessment = interpreted.assessment;
   const sortedMessages = [...messages].sort((left, right) => left.internalDate - right.internalDate);
   const latestMessage = sortedMessages[sortedMessages.length - 1];
   const idempotencyKey = `gmail:${latestMessage.id}:${POLICY_VERSION}`;
@@ -484,9 +596,9 @@ async function persistAssessment(
     attention_score: assessment.attentionScore,
     attention_level: assessment.attentionLevel,
     confidence: assessment.confidence,
-    model_provider: "rules",
-    model_name: "revenue-ea-policy",
-    model_version: "1",
+    model_provider: interpreted.model.provider,
+    model_name: interpreted.model.name,
+    model_version: interpreted.model.version,
     policy_version: POLICY_VERSION,
   }, { onConflict: "event_id,policy_version" }).select("id").single();
   if (assessmentError) throw assessmentError;
