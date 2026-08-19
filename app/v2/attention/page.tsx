@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   AlertTriangle,
   BellRing,
+  CalendarPlus,
   Check,
   CheckCircle2,
   Clock3,
@@ -60,17 +61,26 @@ function preparedText(item: ExecutiveActionItem) {
 function itemIcon(item: ExecutiveActionItem) {
   if (item.actionType === "reply_draft") return Mail;
   if (item.actionType === "document_draft" || item.actionType === "meeting_brief") return FileText;
+  if (item.actionType === "calendar_proposal") return CalendarPlus;
   if (item.actionType === "notification") return BellRing;
   return Sparkles;
 }
 
 function proposedDetails(item: ExecutiveActionItem) {
-  const ignored = new Set(["body", "markdown", "text", "description"]);
+  const ignored = new Set(["body", "markdown", "text"]);
+  if (item.actionType !== "calendar_proposal") ignored.add("description");
   return Object.entries(item.content).filter(([key, value]) => !ignored.has(key) && value != null && value !== "");
 }
 
+function proposedDetailValue(key: string, value: unknown) {
+  if ((key === "starts_at" || key === "ends_at") && typeof value === "string") {
+    return new Date(value).toLocaleString("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 function executesOnApproval(item: ExecutiveActionItem) {
-  return ["reply_draft", "document_draft", "task_create"].includes(item.actionType);
+  return ["reply_draft", "document_draft", "calendar_proposal", "task_create"].includes(item.actionType);
 }
 
 function actionButtonLabel(item: ExecutiveActionItem, isBusy: boolean) {
@@ -78,17 +88,20 @@ function actionButtonLabel(item: ExecutiveActionItem, isBusy: boolean) {
   if (item.executionStatus === "completed") {
     if (item.actionType === "reply_draft") return "Email sent";
     if (item.actionType === "document_draft") return "Document created";
+    if (item.actionType === "calendar_proposal") return "Diary invite created";
     if (item.actionType === "task_create") return "Task created";
   }
   const retry = item.approvalStatus === "approved" && item.executionStatus === "failed";
   if (isBusy) {
     if (item.actionType === "reply_draft") return "Sending…";
     if (item.actionType === "document_draft") return "Creating document…";
+    if (item.actionType === "calendar_proposal") return "Creating diary invite…";
     if (item.actionType === "task_create") return "Creating task…";
     return "Approving…";
   }
   if (item.actionType === "reply_draft") return retry ? "Retry approved email" : item.approvalStatus === "approved" ? "Send approved email" : "Approve and send email";
   if (item.actionType === "document_draft") return retry ? "Retry document creation" : item.approvalStatus === "approved" ? "Create approved document" : "Approve and create document";
+  if (item.actionType === "calendar_proposal") return retry ? "Retry diary invite" : item.approvalStatus === "approved" ? "Create approved diary invite" : "Approve and create diary invite";
   if (item.actionType === "task_create") return retry ? "Retry task creation" : item.approvalStatus === "approved" ? "Create approved task" : "Approve and create task";
   return item.approvalStatus === "approved" ? "Approved" : "Approve proposed update";
 }
@@ -98,6 +111,7 @@ function approvalBoundary(item: ExecutiveActionItem) {
   if (item.executionStatus === "completed") return "The approved version has been completed and recorded.";
   if (item.actionType === "reply_draft") return "Nothing will be sent until you approve this exact version.";
   if (item.actionType === "document_draft") return "No Google Drive file exists until you approve its creation.";
+  if (item.actionType === "calendar_proposal") return "No diary event or invitation exists until you approve these exact details.";
   if (item.actionType === "task_create") return "No task will be created until you approve it.";
   return "Approval records your decision. Execution for this action is not enabled yet.";
 }
@@ -105,12 +119,14 @@ function approvalBoundary(item: ExecutiveActionItem) {
 function resultLink(item: ExecutiveActionItem) {
   if (!item.externalResultReference) return null;
   if (item.actionType === "document_draft" && item.externalResultReference.startsWith("http")) return { href: item.externalResultReference, label: "Open document", external: true };
+  if (item.actionType === "calendar_proposal" && item.externalResultReference.startsWith("http")) return { href: item.externalResultReference, label: "Open diary invite", external: true };
   if (item.actionType === "task_create" && item.externalResultReference.startsWith("task:")) return { href: "/v2/tasks", label: "Open tasks", external: false };
   return null;
 }
 
 function failureTitle(item: ExecutiveActionItem) {
   if (item.actionType === "document_draft") return "Document wasn't created";
+  if (item.actionType === "calendar_proposal") return "Diary invite wasn't created";
   if (item.actionType === "reply_draft") return "Email wasn't sent";
   if (item.actionType === "task_create") return "Task wasn't created";
   return "The action couldn't be completed";
@@ -118,6 +134,7 @@ function failureTitle(item: ExecutiveActionItem) {
 
 function successTitle(item: ExecutiveActionItem) {
   if (item.actionType === "document_draft") return "Document created";
+  if (item.actionType === "calendar_proposal") return "Diary invite created";
   if (item.actionType === "reply_draft") return "Email sent";
   if (item.actionType === "task_create") return "Task created";
   return "Action completed";
@@ -244,6 +261,14 @@ export default function AttentionCentrePage() {
         : `Approve and send this exact email to ${recipient}?`;
       if (!window.confirm(prompt)) return;
     }
+    if (item.actionType === "calendar_proposal") {
+      const attendee = String(item.content.attendee_email || "the attendee");
+      const start = typeof item.content.starts_at === "string" ? proposedDetailValue("starts_at", item.content.starts_at) : "the proposed time";
+      const prompt = item.approvalStatus === "approved"
+        ? `Create the already approved diary invite for ${attendee} at ${start}?`
+        : `Approve these exact details, create the diary event and send the invitation to ${attendee} for ${start}?`;
+      if (!window.confirm(prompt)) return;
+    }
     setBusy(item.id);
     setError("");
     setMessage("");
@@ -266,8 +291,8 @@ export default function AttentionCentrePage() {
           title: successTitle(item),
           message: result.message,
           itemId: item.id,
-          href: item.actionType === "document_draft" && result.externalReference?.startsWith("http") ? result.externalReference : undefined,
-          hrefLabel: item.actionType === "document_draft" ? "Open document" : undefined,
+          href: ["document_draft", "calendar_proposal"].includes(item.actionType) && result.externalReference?.startsWith("http") ? result.externalReference : undefined,
+          hrefLabel: item.actionType === "document_draft" ? "Open document" : item.actionType === "calendar_proposal" ? "Open diary invite" : undefined,
         });
       } else {
         setMessage("Approved. Your decision and the exact reviewed version have been recorded. This action has not changed an external system.");
@@ -391,8 +416,8 @@ export default function AttentionCentrePage() {
 
           <section className={styles.items}><div className={styles.sectionHeading}><div><span>{selectedIsActive ? "PREPARED FOR APPROVAL" : "HISTORICAL PREPARED WORK"}</span><h3>{selected.items.length} action{selected.items.length === 1 ? "" : "s"} {selectedIsActive ? "ready" : "retained"}</h3></div>{selectedIsActive && <small>Approve items separately</small>}</div>
             {selected.items.map(item => { const Icon = itemIcon(item); const text = drafts[item.id] ?? preparedText(item); const metadata = proposedDetails(item); const link = resultLink(item); const inlineError = itemErrors[item.id] || item.lastError; const status = item.executionStatus === "completed" ? "completed" : item.executionStatus === "failed" ? "execution failed" : item.executionStatus === "cancelled" ? "no longer needed" : item.approvalStatus.replaceAll("_", " "); const positiveStatus = item.executionStatus === "completed" || item.executionStatus === "cancelled" || (item.approvalStatus === "approved" && item.executionStatus !== "failed"); return <article id={`executive-action-${item.id}`} key={item.id} className={`${styles.itemCard} ${noticeStyles.actionAnchor}`} tabIndex={-1}><div className={styles.itemHeading}><span><Icon size={17} /></span><div><small>{actionTypeLabel(item.actionType)}</small><strong>{item.title}</strong></div><em className={positiveStatus ? styles.approved : ""}>{status}</em></div>
-              {text && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved" || item.executionStatus === "cancelled"} />}
-              {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl>}
+              {text && item.actionType !== "calendar_proposal" && <textarea value={text} onChange={event => setDrafts(current => ({ ...current, [item.id]: event.target.value }))} disabled={!selectedIsActive || item.approvalStatus === "approved" || item.executionStatus === "cancelled"} />}
+              {metadata.length > 0 && <dl>{metadata.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{proposedDetailValue(key, value)}</dd></div>)}</dl>}
               {inlineError && <p className={styles.error} role="alert">{inlineError}</p>}
               <div className={styles.itemFooter}><span>{selectedIsActive ? approvalBoundary(item) : "Retained for reference. This version can no longer be approved."}</span><div>{link && <Link href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined}>{link.label} <ExternalLink size={15} /></Link>}{selectedIsActive && <button onClick={() => void approveAndExecute(item)} disabled={Boolean(busy) || item.executionStatus === "completed" || item.executionStatus === "executing" || item.executionStatus === "cancelled" || (!executesOnApproval(item) && item.approvalStatus === "approved")}><Check size={16} /> {actionButtonLabel(item, busy === item.id)}</button>}</div></div>
             </article>; })}
