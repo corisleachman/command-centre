@@ -306,7 +306,7 @@ export function actionTypeLabel(type: ExecutiveActionType) {
     reply_draft: "Reply drafted",
     document_draft: "Document prepared",
     meeting_brief: "Meeting brief prepared",
-    calendar_proposal: "Calendar proposal",
+    calendar_proposal: "Diary invite prepared",
     task_create: "Task proposed",
     task_reprioritise: "Priority change proposed",
     opportunity_patch: "Opportunity update proposed",
