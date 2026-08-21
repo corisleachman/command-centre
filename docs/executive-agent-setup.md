@@ -96,14 +96,14 @@ The database already includes the Gmail history, watch-expiry and recovery-sync 
 
 ## Thread intelligence
 
-The `revenue-ea-v3` policy uses a hybrid path:
+The `revenue-ea-v4` policy uses a hybrid path:
 
 - hard safety rules suppress automated mail, avoid repeat work after Coris has replied and handle agreed meeting invitations from the full thread;
 - a server-side model adapter can interpret less predictable conversations using validated JSON output;
 - unsafe recipients, invalid calendar times and ungrounded calendar actions are rejected before they reach an action pack;
 - if the model is unavailable, slow or returns unsafe output, the deterministic policy remains in force.
 
-To enable the model adapter, add a Supabase Edge Function secret named `AI_GATEWAY_API_KEY`. The optional `EXECUTIVE_AGENT_MODEL` secret chooses the model and defaults to `openai/gpt-5.6-luna`. The key is never sent to the browser. Adding the key means full email-thread text is sent from the Edge Function to Vercel AI Gateway and the selected model provider for interpretation.
+To enable the model adapter, add a Supabase Edge Function secret named `AI_GATEWAY_API_KEY`. The optional `EXECUTIVE_AGENT_MODEL` secret chooses the model and defaults to `openai/gpt-5.4`. The key is never sent to the browser. Adding the key means full email-thread text is sent from the Edge Function to Vercel AI Gateway and the selected model provider for interpretation.
 
 The application tables and UI do not depend on a particular model vendor. If the key is not configured, all other behaviour, including the agreed-meeting flow, continues with the deterministic policy.
 

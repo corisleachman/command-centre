@@ -37,6 +37,7 @@ import {
   type ExecutiveFeedbackType,
 } from "../../../lib/v2-executive-agent";
 import styles from "./attention.module.css";
+import intelligenceStyles from "./attention-intelligence.module.css";
 import noticeStyles from "./attention-notice.module.css";
 
 type ActionNotice = {
@@ -409,6 +410,8 @@ export default function AttentionCentrePage() {
           <div className={styles.reviewHeader}><div><span className={styles.level}>{selectedIsActive ? `${attentionLabel(selected.attentionLevel)} · score ${selected.assessment?.attentionScore ?? "-"}` : `Recent history · ${selected.status.replaceAll("_", " ")}`}</span><h2>{selected.title}</h2><p>{selected.executiveSummary}</p></div>{selectedIsActive && <div className={styles.headerActions}><button onClick={() => void snooze(selected)} disabled={Boolean(busy)}><Clock3 size={15} /> Tomorrow</button><button onClick={() => void dismiss(selected)} disabled={Boolean(busy)}><X size={15} /> Dismiss</button></div>}</div>
 
           <div className={styles.contextGrid}><div><span>{selectedIsActive ? "WHY NOW" : "WHY IT WAS RAISED"}</span><p>{selected.whyNow || selected.assessment?.consequenceOfDelay || "Prepared for your next review."}</p></div><div><span>{selectedIsActive ? "REVIEW BY" : "ORIGINAL REVIEW BY"}</span><p>{formattedDate(selected.reviewBy)}</p></div><div><span>STATE CHANGE</span><p>{selected.assessment?.previousState || "Unknown"} → {selected.assessment?.newState || "No stage change proposed"}</p></div></div>
+
+          {selectedIsActive && selected.assessment?.modelProvider === "rules" && selected.assessment.newState !== "meeting_agreed_invite_pending" && <section className={intelligenceStyles.intelligenceWarning}><AlertTriangle size={19} /><div><strong>Pattern-based assessment</strong><p>Full-thread model judgement was not used for this item. The agent has limited itself to a verified pattern, so review the interpretation before approving anything.</p></div></section>}
 
           {selected.assessment?.evidence.length ? <section className={styles.evidence}><h3>What this is based on</h3>{selected.assessment.evidence.map((item, index) => <blockquote key={`${item.quote}-${index}`}>{item.quote || item.label}<small>{item.label && item.quote ? item.label : item.source}</small></blockquote>)}</section> : null}
 

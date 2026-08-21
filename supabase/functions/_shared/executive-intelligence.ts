@@ -90,8 +90,13 @@ function hasCalendarAgreement(messages: ExecutiveSourceMessage[]) {
   const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
   const latest = sorted.at(-1);
   if (!latest || latest.mine || latest.automated) return false;
-  return /\b(?:yes|yeah|yep|sure|perfect|agreed|works for me|that works|sounds good|let(?:'|’)s do it)\b/i.test(latest.body)
-    && /\b(?:send|put|pop|create|share)\b.{0,35}\b(?:calendar\s+)?invite\b|\b(?:calendar\s+)?invite\b.{0,35}\b(?:send|create|share)\b/i.test(latest.body);
+  const thread = sorted.map(message => message.body).join("\n");
+  const acceptedOrProposed = /\b(?:yes|yeah|yep|sure|perfect|agreed|works for me|that works|sounds good|let(?:'|’)s do it)\b/i.test(latest.body)
+    || /\b(?:call|chat|meeting|talk|reconvene)\b/i.test(latest.body);
+  const corisCanSend = /\b(?:send|put|pop|create|share)\b.{0,45}\b(?:calendar\s+)?invite\b|\b(?:calendar\s+)?invite\b.{0,45}\b(?:send|create|share)\b|\bfeel free to share\b/i.test(latest.body);
+  const groundedDate = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(thread);
+  const groundedTime = /\b\d{1,2}(?::[0-5]\d)?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/i.test(thread);
+  return acceptedOrProposed && corisCanSend && groundedDate && groundedTime;
 }
 
 function normalizeModelAssessment(raw: unknown, messages: ExecutiveSourceMessage[], fallback: ExecutiveAssessment): ExecutiveAssessment {
@@ -137,10 +142,6 @@ function normalizeModelAssessment(raw: unknown, messages: ExecutiveSourceMessage
   }] : fallback.evidence;
 
   const resolvedAttentionLevel = ATTENTION_LEVELS.has(attentionLevel) ? attentionLevel as ExecutiveAssessment["attentionLevel"] : fallback.attentionLevel;
-  if (resolvedAttentionLevel !== "silent" && !actions.length && fallback.actions.length) {
-    throw new Error("The model removed all safe prepared actions from an assessment that still needs attention.");
-  }
-
   return {
     category: stringValue(value.category, fallback.category),
     summary: stringValue(value.summary, fallback.summary),
@@ -216,6 +217,7 @@ Rules:
 - Revenue, client and opportunity movement matters most. Bulk email and promotions are silent.
 - The latest message alone is not enough. Resolve proposals, acceptances, commitments, dates, times and ownership from the full thread.
 - Do not create a generic reply, task, onboarding document or follow-up when a specific operational next step is already agreed.
+- It is valid to return attentionLevel silent and no actions when an email is informational, confirms completion, or does not require Coris to respond. Do not preserve an action just because a rules-based fallback suggested one.
 - If a meeting was accepted and Coris was asked to send the invite, use newState meeting_agreed_invite_pending. Prepare a short confirmation reply only if useful and a calendar_proposal only when the exact date and time are grounded in the thread.
 - Never invent a date, fee, scope, attendee, commitment or commercial agreement. Put unresolved facts in missingFacts.
 - Prepared actions require approval. Do not claim anything has been sent or created.
@@ -229,11 +231,14 @@ ${JSON.stringify(transcript)}`;
 export async function assessConversationWithIntelligence(messages: ExecutiveSourceMessage[]): Promise<InterpretedConversation> {
   const fallback = assessConversation(messages);
   if (fallback.category === "noise" || fallback.newState === "waiting_for_reply" || fallback.newState === "meeting_agreed_invite_pending") {
-    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "2" } };
+    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
   }
   const apiKey = Deno.env.get("AI_GATEWAY_API_KEY") || "";
-  const modelName = Deno.env.get("EXECUTIVE_AGENT_MODEL") || "openai/gpt-5.6-luna";
-  if (!apiKey) return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "2" } };
+  const modelName = Deno.env.get("EXECUTIVE_AGENT_MODEL") || "openai/gpt-5.4";
+  if (!apiKey) {
+    console.warn("[executive-agent] AI_GATEWAY_API_KEY is not configured; deterministic policy retained", { model: modelName });
+    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25_000);
@@ -256,13 +261,13 @@ export async function assessConversationWithIntelligence(messages: ExecutiveSour
     const text = payload.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("AI Gateway returned no assessment.");
     const assessment = normalizeModelAssessment(JSON.parse(text), messages, fallback);
-    return { assessment, model: { provider: "vercel-ai-gateway", name: stringValue(payload.model, modelName), version: "1" } };
+    return { assessment, model: { provider: "vercel-ai-gateway", name: stringValue(payload.model, modelName), version: "2" } };
   } catch (error) {
     console.error("[executive-agent] model assessment failed; deterministic policy retained", {
       model: modelName,
       detail: error instanceof Error ? error.message : "Unknown model failure",
     });
-    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "2" } };
+    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
   } finally {
     clearTimeout(timeout);
   }

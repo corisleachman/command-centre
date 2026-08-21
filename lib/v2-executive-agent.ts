@@ -56,6 +56,9 @@ export type ExecutiveActionPack = {
     evidence: ExecutiveEvidence[];
     consequenceOfDelay: string | null;
     attentionScore: number;
+    modelProvider: string;
+    modelName: string | null;
+    modelVersion: string | null;
   } | null;
   items: ExecutiveActionItem[];
 };
@@ -173,6 +176,9 @@ function parsePack(row: Row): ExecutiveActionPack {
       evidence: asRows(assessmentRow.evidence).map(item => ({ label: asNullableString(item.label) ?? undefined, quote: asNullableString(item.quote) ?? undefined, source: asNullableString(item.source) ?? undefined })),
       consequenceOfDelay: asNullableString(assessmentRow.consequence_of_delay),
       attentionScore: asNumber(assessmentRow.attention_score),
+      modelProvider: asString(assessmentRow.model_provider),
+      modelName: asNullableString(assessmentRow.model_name),
+      modelVersion: asNullableString(assessmentRow.model_version),
     } : null,
     items,
   };
@@ -189,7 +195,7 @@ export async function loadExecutiveActionPacks(
       id,event_id,assessment_id,title,executive_summary,why_now,status,attention_level,review_by,
       contact_name,organisation_name,source_url,missing_facts,proposed_changes,confidence,
       read_at,snoozed_until,created_at,updated_at,
-      assessment:attention_assessments(category,summary,previous_state,new_state,changes,explicit_requests,evidence,consequence_of_delay,attention_score),
+      assessment:attention_assessments(category,summary,previous_state,new_state,changes,explicit_requests,evidence,consequence_of_delay,attention_score,model_provider,model_name,model_version),
       items:action_items(id,action_type,title,content,content_version,content_hash,approval_required,approval_status,execution_status,external_result_reference,last_error,position,approvals:action_approvals(amendments,decided_at))
     `)
     .eq("user_id", userId)

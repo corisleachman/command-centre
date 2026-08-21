@@ -70,12 +70,14 @@ type SchedulingAgreement = {
   timezone: string;
   whenLabel: string | null;
   durationMinutes: number;
+  replyLine: string;
   proposalEvidence: string;
   acceptanceEvidence: string;
 };
 
 const LONDON_TIMEZONE = "Europe/London";
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
 function localDateParts(timestamp: number, timezone: string) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -126,6 +128,41 @@ function proposedTime(value: string) {
   return { hour, minute };
 }
 
+function explicitCalendarDate(value: string, referenceTimestamp: number) {
+  const dayFirst = value.match(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)?\s*(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+(\d{4}))?\b/i);
+  const monthFirst = value.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b/i);
+  const match = dayFirst || monthFirst;
+  if (!match) return null;
+  const day = Number(dayFirst ? match[1] : match[2]);
+  const monthName = String(dayFirst ? match[2] : match[1]).toLowerCase();
+  const suppliedYear = dayFirst ? match[3] : match[3];
+  const reference = localDateParts(referenceTimestamp, LONDON_TIMEZONE);
+  let year = suppliedYear ? Number(suppliedYear) : reference.year;
+  const month = MONTHS.indexOf(monthName) + 1;
+  if (!month || day < 1 || day > 31) return null;
+  if (!suppliedYear && Date.UTC(year, month - 1, day) < Date.UTC(reference.year, reference.month - 1, reference.day) - 86_400_000) year += 1;
+  return { year, month, day };
+}
+
+function weekdayCalendarDate(value: string, referenceTimestamp: number, time: { hour: number; minute: number }) {
+  const dayName = WEEKDAYS.find(day => new RegExp(`\\b${day}\\b`, "i").test(value));
+  if (!dayName) return null;
+  const reference = localDateParts(referenceTimestamp, LONDON_TIMEZONE);
+  const referenceDay = WEEKDAYS.indexOf(reference.weekday);
+  const targetDay = WEEKDAYS.indexOf(dayName);
+  let daysAhead = (targetDay - referenceDay + 7) % 7;
+  const referenceMoment = new Date(referenceTimestamp);
+  if (daysAhead === 0 && time.hour * 60 + time.minute <= referenceMoment.getUTCHours() * 60 + referenceMoment.getUTCMinutes()) daysAhead = 7;
+  const target = new Date(Date.UTC(reference.year, reference.month - 1, reference.day + daysAhead));
+  return { year: target.getUTCFullYear(), month: target.getUTCMonth() + 1, day: target.getUTCDate() };
+}
+
+function shortTime(time: { hour: number; minute: number }) {
+  const hour = time.hour % 12 || 12;
+  const minute = time.minute ? `:${String(time.minute).padStart(2, "0")}` : "";
+  return `${hour}${minute}${time.hour >= 12 ? "pm" : "am"}`;
+}
+
 function meetingDuration(messages: ExecutiveSourceMessage[]) {
   for (const message of [...messages].reverse()) {
     const range = message.body.match(/\b(\d{1,3})\s*(?:-|–|to)\s*(\d{1,3})\s*(?:minutes?|mins?)\b/i);
@@ -144,38 +181,44 @@ function schedulingAgreement(
 ): SchedulingAgreement | null {
   if (!latestIncoming || responseAlreadySent || automated) return null;
   const acceptance = /\b(?:yes|yeah|yep|sure|perfect|agreed|works for me|that works|sounds good|let(?:'|’)s do it)\b/i.test(latestIncoming.body);
-  const inviteRequest = /\b(?:send|put|pop|create|share)\b.{0,35}\b(?:calendar\s+)?invite\b|\b(?:calendar\s+)?invite\b.{0,35}\b(?:send|create|share)\b/i.test(latestIncoming.body);
-  if (!acceptance || !inviteRequest) return null;
+  const inviteRequest = /\b(?:send|put|pop|create|share)\b.{0,45}\b(?:calendar\s+)?invite\b|\b(?:calendar\s+)?invite\b.{0,45}\b(?:send|create|share)\b|\bfeel free to share\b/i.test(latestIncoming.body);
+  const latestTime = proposedTime(latestIncoming.body);
+  const meetingProposal = Boolean(latestTime) && /\b(?:call|chat|meeting|talk|reconvene)\b/i.test(latestIncoming.body);
+  if (!inviteRequest || (!acceptance && !meetingProposal)) return null;
 
-  const incomingIndex = messages.findIndex(message => message.id === latestIncoming.id);
-  const earlier = incomingIndex >= 0 ? messages.slice(0, incomingIndex) : messages;
-  const proposed = [...earlier].reverse().find(message => {
-    if (!message.mine) return false;
-    const hasDay = WEEKDAYS.some(day => new RegExp(`\\b${day}\\b`, "i").test(message.body));
-    return hasDay && Boolean(proposedTime(message.body));
-  });
-  if (!proposed) {
+  const ordered = [...messages].sort((left, right) => left.internalDate - right.internalDate);
+  const timeSource = latestTime ? latestIncoming : [...ordered].reverse().find(message => Boolean(proposedTime(message.body)));
+  const time = timeSource ? proposedTime(timeSource.body) : null;
+  if (!time) {
     return {
       startsAt: null,
       endsAt: null,
       timezone: LONDON_TIMEZONE,
       whenLabel: null,
       durationMinutes: meetingDuration(messages),
+      replyLine: "Yes, let's do it. Send me the time that works for you and I will get the invite across.",
+      proposalEvidence: "A call was agreed, but no exact time could be read safely from the conversation.",
+      acceptanceEvidence: excerpt(latestIncoming.body),
+    };
+  }
+  const absoluteDateSource = [...ordered].reverse().find(message => Boolean(explicitCalendarDate(message.body, message.internalDate)));
+  const weekdaySource = [...ordered].reverse().find(message => WEEKDAYS.some(day => new RegExp(`\\b${day}\\b`, "i").test(message.body)));
+  const dateSource = absoluteDateSource || weekdaySource;
+  if (!dateSource) {
+    return {
+      startsAt: null,
+      endsAt: null,
+      timezone: LONDON_TIMEZONE,
+      whenLabel: null,
+      durationMinutes: meetingDuration(messages),
+      replyLine: acceptance ? "No problem. Invite on its way." : `${shortTime(time)} works for me. I will send the invite once the date is confirmed.`,
       proposalEvidence: "A call was proposed earlier in the conversation, but its date or time could not be read safely.",
       acceptanceEvidence: excerpt(latestIncoming.body),
     };
   }
-
-  const dayName = WEEKDAYS.find(day => new RegExp(`\\b${day}\\b`, "i").test(proposed.body));
-  const time = proposedTime(proposed.body);
-  if (!dayName || !time) return null;
-  const reference = localDateParts(proposed.internalDate, LONDON_TIMEZONE);
-  const referenceDay = WEEKDAYS.indexOf(reference.weekday);
-  const targetDay = WEEKDAYS.indexOf(dayName);
-  let daysAhead = (targetDay - referenceDay + 7) % 7;
-  if (daysAhead === 0 && time.hour * 60 + time.minute <= new Date(proposed.internalDate).getUTCHours() * 60 + new Date(proposed.internalDate).getUTCMinutes()) daysAhead = 7;
-  const target = new Date(Date.UTC(reference.year, reference.month - 1, reference.day + daysAhead));
-  const startsAt = zonedIso(target.getUTCFullYear(), target.getUTCMonth() + 1, target.getUTCDate(), time.hour, time.minute, LONDON_TIMEZONE);
+  const date = explicitCalendarDate(dateSource.body, dateSource.internalDate) || weekdayCalendarDate(dateSource.body, dateSource.internalDate, time);
+  if (!date) return null;
+  const startsAt = zonedIso(date.year, date.month, date.day, time.hour, time.minute, LONDON_TIMEZONE);
   const durationMinutes = meetingDuration(messages);
   const endsAt = new Date(Date.parse(startsAt) + durationMinutes * 60_000).toISOString();
   const whenLabel = new Intl.DateTimeFormat("en-GB", {
@@ -192,7 +235,8 @@ function schedulingAgreement(
     timezone: LONDON_TIMEZONE,
     whenLabel,
     durationMinutes,
-    proposalEvidence: excerpt(proposed.body),
+    replyLine: acceptance ? "No problem. Invite on its way." : `${shortTime(time)} works for me. Invite on its way.`,
+    proposalEvidence: excerpt(dateSource.id === timeSource?.id ? dateSource.body : `${dateSource.body} ${timeSource?.body || ""}`),
     acceptanceEvidence: excerpt(latestIncoming.body),
   };
 }
@@ -265,6 +309,14 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   const explicitRequest = !automated && !responseAlreadySent && /\?|\b(can you|could you|would you|please|let me know|what do you need|send|share|confirm|review)\b/i.test(incomingText);
   const positive = !automated && !responseAlreadySent && /\b(keen to (continue|move forward|proceed)|move forward|proceed|get started|sounds good|looks good|agree|happy to|exactly what|really like|incredibly helpful|yes[, .]|go ahead)\b/i.test(lower);
   const onboardingSignal = !automated && !responseAlreadySent && /\b(get started|kick[ -]?off|onboard|what do you need from me|next steps?)\b/i.test(lower);
+  const informationalCompletion = !automated && !responseAlreadySent
+    && /\b(?:application|account|registration) (?:was|has been|is now) approved\b|\bwelcome to (?:our|the) (?:affiliate|partner) community\b/i.test(lower)
+    && !/\?/.test(latestIncoming?.body || "");
+  const meetingRequest = !automated && !responseAlreadySent && !onboardingSignal
+    && /\b(?:shall we|could we|can we|let(?:'|’)s|book|arrange|schedule|have)\b.{0,55}\b(?:\d{1,3}\s*(?:minutes?|mins?)|call|chat|meeting)\b|\b(?:call|chat|meeting)\b.{0,55}\b(?:book|arrange|schedule|get .* in)\b/i.test(lower);
+  const requestedMeetingMinutes = Number(lower.match(/\b(\d{1,3})\s*(?:minutes?|mins?)\b/i)?.[1] || 0);
+  const associatePartnerDiscussion = /\bassociate partner\b/i.test(threadText);
+  const pilotDiscussion = /\bpilot\b/i.test(incomingText);
   const negative = !automated && !responseAlreadySent && /\b(not proceeding|not moving forward|pass on this|decline|not right now|unfortunately|no budget|won't be able)\b/i.test(lower);
   const positioningFocus = !automated && !responseAlreadySent && /\b(positioning|messaging|what we(?:'re| are) selling|who(?:m)? we(?:'re| are) selling|meaningfully different|proposition)\b/i.test(lower);
   const relationship = sorted.length >= 3;
@@ -278,14 +330,16 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   if (revenue && (positive || negative || explicitRequest)) score += 10;
   if (relationship) score += 10;
   if (scheduling) score = Math.max(score, scheduling.startsAt ? 90 : 78);
+  if (meetingRequest && revenue) score = Math.max(score, 75);
+  if (informationalCompletion) score = Math.min(score, 20);
   if (automated) score -= 50;
   if (!explicitRequest && !positive && !negative) score -= 20;
   score = clamp(score, 0, 100);
 
-  const confidence = automated ? .94 : scheduling?.startsAt ? .98 : scheduling ? .84 : onboardingSignal && revenue ? .96 : revenue && explicitRequest ? .86 : revenue ? .73 : .65;
-  const attentionLevel = automated ? "silent" : score >= 80 && confidence >= .75 ? "interrupt_now" : score >= 60 ? "top_of_today" : score >= 35 ? "morning_brief" : "silent";
+  const confidence = automated || informationalCompletion ? .94 : scheduling?.startsAt ? .98 : scheduling ? .84 : meetingRequest && revenue ? .9 : onboardingSignal && revenue ? .96 : revenue && explicitRequest ? .86 : revenue ? .73 : .65;
+  const attentionLevel = automated || informationalCompletion ? "silent" : score >= 80 && confidence >= .75 ? "interrupt_now" : score >= 60 ? "top_of_today" : score >= 35 ? "morning_brief" : "silent";
   const previousState = automated ? "automated_message" : /\bproposal|scope|recommendation|approach\b/i.test(threadText) ? "proposal_discussion" : "active_conversation";
-  const newState = automated ? "filtered_as_noise" : responseAlreadySent ? "waiting_for_reply" : scheduling ? "meeting_agreed_invite_pending" : negative ? "at_risk_or_declined" : onboardingSignal && positive ? "positive_intent_pending_onboarding" : positive ? "positive_movement" : explicitRequest ? "response_required" : previousState;
+  const newState = automated ? "filtered_as_noise" : responseAlreadySent ? "waiting_for_reply" : informationalCompletion ? "completed_no_response_required" : scheduling ? "meeting_agreed_invite_pending" : meetingRequest ? "meeting_requested_time_pending" : negative ? "at_risk_or_declined" : onboardingSignal && positive ? "positive_intent_pending_onboarding" : positive ? "positive_movement" : explicitRequest ? "response_required" : previousState;
   const changes: Array<{ type: string; evidence: string }> = [];
   if (positive) changes.push({ type: "buying_signal", evidence: excerpt(latestIncoming?.body || incomingText) });
   if (onboardingSignal) changes.push({ type: "onboarding_signal", evidence: excerpt(latestIncoming?.body || incomingText) });
@@ -293,14 +347,18 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
   if (negative) changes.push({ type: "commercial_risk", evidence: excerpt(latestIncoming?.body || incomingText) });
   if (scheduling) changes.push({ type: "meeting_agreed", evidence: scheduling.acceptanceEvidence });
 
-  const explicitRequests = scheduling ? ["Send the agreed calendar invitation"] : explicitRequest ? [onboardingSignal ? "Explain what is needed to get started" : "Reply to the sender's request"] : [];
-  const missingFacts = scheduling ? (scheduling.startsAt ? [] : ["Confirmed meeting date and time"]) : onboardingSignal ? ["Confirmed fee", "Engagement length", "Preferred kickoff date"] : [];
+  const explicitRequests = scheduling ? ["Confirm the proposed time and send the calendar invitation"] : meetingRequest ? [`Arrange the requested ${requestedMeetingMinutes || 30}-minute conversation`] : explicitRequest ? [onboardingSignal ? "Explain what is needed to get started" : "Reply to the sender's request"] : [];
+  const missingFacts = scheduling ? (scheduling.startsAt ? [] : ["Confirmed meeting date and time"]) : meetingRequest ? ["A suitable meeting time"] : onboardingSignal ? ["Confirmed fee", "Engagement length", "Preferred kickoff date"] : [];
   const summary = automated
     ? `${contact} was identified as an automated or bulk email and filtered from review.`
     : responseAlreadySent
     ? `You have already sent the latest message to ${contact}. There is no new change to interrupt you about.`
+    : informationalCompletion
+    ? `${contact} confirmed that the application is approved. No reply is required.`
     : scheduling
-    ? `${contact} accepted your proposed call${scheduling.whenLabel ? ` for ${scheduling.whenLabel}` : ""} and asked you to send the invitation. The diary invite is now the next action.`
+    ? `${contact} confirmed the call details${scheduling.whenLabel ? ` for ${scheduling.whenLabel}` : ""} and said you can send the invitation. The diary invite is now the next action.`
+    : meetingRequest
+    ? `${contact} wants to arrange a ${requestedMeetingMinutes || 30}-minute conversation${associatePartnerDiscussion ? " about the Associate Partner opportunity" : pilotDiscussion ? " about a possible pilot" : ""}. A meeting time is the next decision.`
     : negative
     ? `${contact} has replied with a negative commercial signal. Review the reason and decide whether to close, clarify or nurture the opportunity.`
     : onboardingSignal
@@ -315,6 +373,8 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
     ? scheduling.startsAt
       ? "The meeting is agreed. Create the invitation today so the commitment is in both diaries while the conversation is current."
       : "The meeting is agreed, but the date or time needs your judgement before an invitation can be prepared."
+    : meetingRequest
+      ? "This is a live commercial conversation. Reply today, confirm your interest and move directly to choosing a meeting time."
     : attentionLevel === "interrupt_now"
     ? "Reply today while the conversation has momentum. The system has prepared the reversible work and left commercial commitments for your approval."
     : attentionLevel === "top_of_today"
@@ -330,7 +390,7 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
       content: {
         to: emailAddress(from),
         subject: `Re: ${subject}`,
-        body: `Hi ${first},\n\nNo problem. Invite on its way.\n\nBest,\nCoris`,
+        body: `Hi ${first},\n\n${scheduling.replyLine}\n\nBest,\nCoris`,
       },
     });
     if (scheduling.startsAt && scheduling.endsAt) {
@@ -350,7 +410,23 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
         },
       });
     }
-  } else if (!negative && (explicitRequest || positive)) {
+  } else if (meetingRequest) {
+    const discussion = associatePartnerDiscussion
+      ? `the Associate Partner model${pilotDiscussion ? ", what a pilot could look like and where I would focus" : ""}`
+      : pilotDiscussion
+        ? "what a pilot could look like"
+        : "the opportunity";
+    actions.push({
+      type: "reply_draft",
+      title: `Arrange the call with ${contact}`,
+      position: 1,
+      content: {
+        to: emailAddress(from),
+        subject: `Re: ${subject}`,
+        body: `Hi ${first},\n\nThanks for picking this back up. Yes, I am still interested and I would be happy to get ${requestedMeetingMinutes || 30} minutes in to talk through ${discussion}.\n\nSend over a few times that work for you and I will get something in the diary.\n\nBest,\nCoris`,
+      },
+    });
+  } else if (!negative && onboardingSignal) {
     const positioningParagraph = positioningFocus
       ? `I agree that positioning and messaging should be the first workstream in discovery. There is little value in pushing more volume through the system until we are confident about what ${organisation || "the business"} is selling, who it is for and why it is meaningfully different.`
       : "That sounds good. I am happy to take the next step and make sure the opening discovery work gives us a clear foundation.";
@@ -369,9 +445,10 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
     });
   }
   if (!scheduling && onboardingSignal) actions.push({ type: "document_draft", title: "Initial discovery and onboarding requirements", position: 2, content: { title: `${organisation || contact}: discovery and onboarding requirements`, markdown: discoveryDocument(organisation) } });
-  if (!scheduling && (attentionLevel === "interrupt_now" || attentionLevel === "top_of_today")) actions.push({ type: "task_create", title: `Review and respond to ${contact}`, position: 3, content: { title: `Review prepared response to ${contact}`, category: "cash", priority: 5, estimated_minutes: 30, due_on: new Date().toISOString().slice(0, 10), revenue_proximity: "immediate" } });
+  const hasPreparedReply = actions.some(action => action.type === "reply_draft");
+  if (!scheduling && !hasPreparedReply && !informationalCompletion && (attentionLevel === "interrupt_now" || attentionLevel === "top_of_today")) actions.push({ type: "task_create", title: `Review and respond to ${contact}`, position: 3, content: { title: `Review ${subject} and decide the response`, category: "cash", priority: 5, estimated_minutes: 30, due_on: new Date().toISOString().slice(0, 10), revenue_proximity: "immediate" } });
   if (!scheduling && positive && revenue) actions.push({ type: "opportunity_patch", title: "Update commercial opportunity", position: 4, content: { previous_state: previousState, proposed_state: newState, mark_won: false, reason: "Positive movement detected; formal agreement is not yet evidenced." } });
-  if (!scheduling && !negative && (explicitRequest || positive)) actions.push({ type: "follow_up_schedule", title: "Prepare follow-up trigger", position: 5, content: { activate_after: "reply_sent", wait_days: 3, reason: "Preserve momentum if there is no response after the approved reply." } });
+  if (!scheduling && !negative && hasPreparedReply) actions.push({ type: "follow_up_schedule", title: "Prepare follow-up trigger", position: 5, content: { activate_after: "reply_sent", wait_days: 3, reason: "Preserve momentum if there is no response after the approved reply." } });
 
   return {
     category: automated ? "noise" : revenue ? "revenue_opportunity" : "relationship_update",
@@ -394,7 +471,7 @@ export function assessConversation(messages: ExecutiveSourceMessage[]): Executiv
     confidence,
     contactName: contact,
     organisationName: organisation,
-    title: automated ? `${contact} was filtered as automated email` : responseAlreadySent ? `Waiting for ${contact}` : scheduling ? `${contact} accepted the call. Invite ready` : onboardingSignal ? `${contact} appears ready to get started` : negative ? `${contact} has sent a commercial risk signal` : `${contact} needs a response`,
+    title: automated ? `${contact} was filtered as automated email` : responseAlreadySent ? `Waiting for ${contact}` : informationalCompletion ? `${contact} confirmed approval` : scheduling ? `${contact} confirmed the call. Invite ready` : meetingRequest ? `${contact} wants to arrange a call` : onboardingSignal ? `${contact} appears ready to get started` : negative ? `${contact} has sent a commercial risk signal` : `${contact} needs a response`,
     whyNow,
     actions,
   };

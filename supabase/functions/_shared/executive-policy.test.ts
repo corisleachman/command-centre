@@ -164,7 +164,7 @@ Deno.test("James Kape acceptance becomes a confirmation and an exact diary invit
 
   const result = assessConversation(messages);
   if (result.newState !== "meeting_agreed_invite_pending") throw new Error(`Unexpected state: ${result.newState}`);
-  if (result.title !== "James Kape accepted the call. Invite ready") throw new Error(`Unexpected title: ${result.title}`);
+  if (result.title !== "James Kape confirmed the call. Invite ready") throw new Error(`Unexpected title: ${result.title}`);
   if (result.actions.length !== 2) throw new Error(`Expected two prepared actions, got ${result.actions.length}`);
   if (result.actions.some(action => action.type === "task_create" || action.type === "follow_up_schedule")) throw new Error("Generic task or follow-up should not be prepared");
   const reply = result.actions.find(action => action.type === "reply_draft");
@@ -174,6 +174,117 @@ Deno.test("James Kape acceptance becomes a confirmation and an exact diary invit
   if (invite?.content.starts_at !== "2026-08-21T13:00:00.000Z") throw new Error(`Unexpected start: ${invite?.content.starts_at}`);
   if (invite?.content.ends_at !== "2026-08-21T13:20:00.000Z") throw new Error(`Unexpected end: ${invite?.content.ends_at}`);
   if (result.commitments.length !== 3) throw new Error("Thread commitments were not retained");
+});
+
+Deno.test("Adam Graham meeting request gets an Associate Partner response, not onboarding boilerplate", () => {
+  const result = assessConversation([{
+    id: "adam-associate-partner",
+    threadId: "adam-thread",
+    from: "Adam Graham <adam@gray-matters.co>",
+    to: "Coris <coris@example.com>",
+    subject: "Gray Matters - Associate Partner Opportunity",
+    body: "Hey Coris, I have been thinking about it and I think there could be a really good fit with the Associate Partner model, particularly with you leaning into the AI, martech and new business systems side. If you are still interested, shall we get 30 mins in and talk through what a pilot might look like and where you would want to focus?",
+    date: "Wed, 19 Aug 2026 12:16:18 +0000",
+    internalDate: Date.parse("2026-08-19T12:16:18Z"),
+    mine: false,
+  }]);
+
+  if (result.newState !== "meeting_requested_time_pending") throw new Error(`Unexpected state: ${result.newState}`);
+  if (result.title !== "Adam Graham wants to arrange a call") throw new Error(`Unexpected title: ${result.title}`);
+  const reply = result.actions.find(action => action.type === "reply_draft");
+  const body = String(reply?.content.body || "");
+  if (!body.includes("Associate Partner model") || !body.includes("30 minutes")) throw new Error(`Reply did not reflect Adam's proposal: ${body}`);
+  if (/discovery|onboarding checklist|positioning and messaging/i.test(body)) throw new Error("Unrelated onboarding copy was reused");
+  if (result.actions.some(action => action.type === "document_draft" || action.type === "task_create")) throw new Error("No onboarding document or redundant response task should be prepared");
+});
+
+Deno.test("Dripify affiliate approval is informational and needs no reply", () => {
+  const result = assessConversation([
+    {
+      id: "affiliate-application",
+      threadId: "dripify-thread",
+      from: "Affiliate Manager <affiliate@dripify.com>",
+      to: "Coris <coris@example.com>",
+      subject: "Your Dripify Affiliate Application: Additional Information Needed",
+      body: "Please tell us about your promotion plans and target audience.",
+      date: "Mon, 17 Aug 2026 04:13:40Z",
+      internalDate: Date.parse("2026-08-17T04:13:40Z"),
+      mine: false,
+    },
+    {
+      id: "affiliate-response",
+      threadId: "dripify-thread",
+      from: "Coris <coris@example.com>",
+      to: "Affiliate Manager <affiliate@dripify.com>",
+      subject: "Re: Your Dripify Affiliate Application: Additional Information Needed",
+      body: "I work with creative agencies and hope to share an affiliate link with a client before they sign up.",
+      date: "Thu, 20 Aug 2026 07:12:15 +0100",
+      internalDate: Date.parse("2026-08-20T07:12:15+01:00"),
+      mine: true,
+    },
+    {
+      id: "affiliate-approved",
+      threadId: "dripify-thread",
+      from: "Affiliate Manager <affiliate@dripify.com>",
+      to: "Coris <coris@example.com>",
+      subject: "Re: Your Dripify Affiliate Application: Additional Information Needed",
+      body: "Hi Coris, your application was approved. Here is your link to promote Dripify. You will also get an invite to PartnerStack. Welcome to our affiliate community!",
+      date: "Thu, 20 Aug 2026 12:34:01 +0300",
+      internalDate: Date.parse("2026-08-20T12:34:01+03:00"),
+      mine: false,
+    },
+  ]);
+
+  if (result.newState !== "completed_no_response_required") throw new Error(`Unexpected state: ${result.newState}`);
+  if (result.attentionLevel !== "silent") throw new Error(`Approval should be informational, got ${result.attentionLevel}`);
+  if (result.actions.length) throw new Error("An approval notice should not produce a reply, onboarding document or follow-up");
+});
+
+Deno.test("Chloe's cross-message date and time produce a concise confirmation and diary invite", () => {
+  const messages: ExecutiveSourceMessage[] = [
+    {
+      id: "chloe-proposes-date",
+      threadId: "chloe-thread",
+      from: "Chloe Flexman <chloe@buffmotion.com>",
+      to: "Coris <coris@example.com>",
+      subject: "Re: New business planning",
+      body: "We would love another chat about next steps. Are you free on Tuesday 1st September?",
+      date: "Thu, 20 Aug 2026 14:14:37 +0100",
+      internalDate: Date.parse("2026-08-20T14:14:37+01:00"),
+      mine: false,
+    },
+    {
+      id: "coris-confirms-date",
+      threadId: "chloe-thread",
+      from: "Coris <coris@example.com>",
+      to: "Chloe Flexman <chloe@buffmotion.com>",
+      subject: "Re: New business planning",
+      body: "Tuesday 1st September works for me. What time were you thinking?",
+      date: "Thu, 20 Aug 2026 14:20:49 +0100",
+      internalDate: Date.parse("2026-08-20T14:20:49+01:00"),
+      mine: true,
+    },
+    {
+      id: "chloe-proposes-time",
+      threadId: "chloe-thread",
+      from: "Chloe Flexman <chloe@buffmotion.com>",
+      to: "Coris <coris@example.com>",
+      subject: "Re: New business planning",
+      body: "Great, does the afternoon work, around 2pm? It would be good to talk through your proposal and align on scope and priorities. Let us know if that time works and I will send over an invite, or feel free to share.",
+      date: "Thu, 20 Aug 2026 21:23:13 +0100",
+      internalDate: Date.parse("2026-08-20T21:23:13+01:00"),
+      mine: false,
+    },
+  ];
+
+  const result = assessConversation(messages);
+  if (result.newState !== "meeting_agreed_invite_pending") throw new Error(`Unexpected state: ${result.newState}`);
+  const reply = result.actions.find(action => action.type === "reply_draft");
+  if (reply?.content.body !== "Hi Chloe,\n\n2pm works for me. Invite on its way.\n\nBest,\nCoris") throw new Error(`Unexpected reply: ${reply?.content.body}`);
+  const invite = result.actions.find(action => action.type === "calendar_proposal");
+  if (invite?.content.starts_at !== "2026-09-01T13:00:00.000Z") throw new Error(`Unexpected start: ${invite?.content.starts_at}`);
+  if (invite?.content.attendee_email !== "chloe@buffmotion.com") throw new Error("Calendar attendee is wrong");
+  if (result.actions.some(action => action.type === "document_draft" || action.type === "task_create" || action.type === "follow_up_schedule")) throw new Error("Specific meeting handling should replace generic onboarding actions");
 });
 
 Deno.test("an accepted meeting without a safe date stays with Coris for judgement", () => {
