@@ -1,0 +1,26 @@
+.intelligenceWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  color: #6d5719;
+  background: #fff8e6;
+  border: 1px solid #e7d59d;
+  border-radius: 13px;
+}
+
+.intelligenceWarning svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.intelligenceWarning strong {
+  font-size: .82rem;
+}
+
+.intelligenceWarning p {
+  margin: 3px 0 0;
+  font-size: .76rem;
+  line-height: 1.45;
+}
