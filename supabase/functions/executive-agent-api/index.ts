@@ -717,7 +717,18 @@ async function persistAssessment(
     .neq("execution_status", "completed");
   if (resetItemsError) throw resetItemsError;
 
+  const { data: completedItems, error: completedItemsError } = await admin
+    .from("action_items")
+    .select("action_type,content_version")
+    .eq("action_pack_id", pack.id)
+    .eq("execution_status", "completed");
+  if (completedItemsError) throw completedItemsError;
+  const completedActionKeys = new Set(
+    (completedItems ?? []).map(item => `${stringValue(item.action_type)}:${Number(item.content_version || 1)}`),
+  );
+
   for (const action of assessment.actions) {
+    if (completedActionKeys.has(`${action.type}:1`)) continue;
     const contentHash = await hashContent(action.content);
     const { error } = await admin.from("action_items").upsert({
       user_id: userId,
@@ -770,7 +781,7 @@ async function retainLatestIncomingPreparation(
   if (incomingIndex < 0) return null;
 
   const historical = await persistAssessment(admin, userId, sorted.slice(0, incomingIndex + 1), sourceUrl, calendarContext);
-  if (!historical.packId) return null;
+  if (!historical.packId) return { packId: null, model: historical.model };
 
   const now = new Date().toISOString();
   const { error: replyError } = await admin
@@ -818,7 +829,7 @@ async function retainLatestIncomingPreparation(
   ]);
   if (packError) throw packError;
   if (notificationError) throw notificationError;
-  return retainedPacks?.length ? historical.packId : null;
+  return { packId: retainedPacks?.length ? historical.packId : null, model: historical.model };
 }
 
 async function activePackThreadIds(
@@ -829,9 +840,9 @@ async function activePackThreadIds(
     .from("action_packs")
     .select("event_id")
     .eq("user_id", userId)
-    .in("status", ["ready_for_review", "executing", "failed"])
-    .order("updated_at", { ascending: false })
-    .limit(20);
+    .in("status", ["ready_for_review", "approved", "executing", "failed"])
+    .order("created_at", { ascending: false })
+    .limit(60);
   if (packsError) throw packsError;
   const eventIds = [...new Set((packs ?? []).map(pack => stringValue(pack.event_id)).filter(Boolean))];
   if (!eventIds.length) return [];
@@ -864,13 +875,19 @@ async function scanInbox(admin: ReturnType<typeof createClient>, userId: string,
       const messages = await loadThread(threadId, token);
       const sourceUrl = `https://mail.google.com/mail/u/0/#all/${threadId}`;
       const current = await persistAssessment(admin, userId, messages, sourceUrl, calendarContext);
-      const retainedPackId = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl, calendarContext);
-      results.push({ ...current, retainedPackId, source: recentThreadIds.includes(threadId) ? "recent" : "visible_pack" });
+      const retained = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl, calendarContext);
+      results.push({
+        ...current,
+        retainedPackId: retained?.packId ?? null,
+        retainedModel: retained?.model ?? null,
+        source: recentThreadIds.includes(threadId) ? "recent" : "visible_pack",
+      });
     } catch (error) {
       results.push({ threadId, error: error instanceof Error ? error.message : "Unable to assess thread." });
     }
   }
   const completedResults = results.filter((result: any) => !result.error);
+  const modelResults = completedResults.flatMap((result: any) => [result.model, result.retainedModel].filter(Boolean));
   return {
     checked: recentThreadIds.length,
     revisited: staleVisibleThreadIds.length,
@@ -878,10 +895,10 @@ async function scanInbox(admin: ReturnType<typeof createClient>, userId: string,
     retained: results.filter((result: any) => Boolean(result.retainedPackId)).length,
     intelligence: {
       gatewayConfigured: Boolean(Deno.env.get("AI_GATEWAY_API_KEY")),
-      gatewayUsed: completedResults.filter((result: any) => result.model?.provider === "vercel-ai-gateway").length,
-      gatewayErrors: completedResults.filter((result: any) => result.model?.reason === "gateway_error").length,
-      gatewayNotConfigured: completedResults.filter((result: any) => result.model?.reason === "not_configured").length,
-      deterministic: completedResults.filter((result: any) => result.model?.reason === "deterministic_gate").length,
+      gatewayUsed: modelResults.filter((model: any) => model.provider === "vercel-ai-gateway").length,
+      gatewayErrors: modelResults.filter((model: any) => model.reason === "gateway_error").length,
+      gatewayNotConfigured: modelResults.filter((model: any) => model.reason === "not_configured").length,
+      deterministic: modelResults.filter((model: any) => model.reason === "deterministic_gate").length,
     },
     results,
   };

@@ -102,6 +102,26 @@ function eventHasContact(event: ExecutiveCalendarEvent, contactEmail: string) {
   return participants.includes(contactEmail) || event.description.toLowerCase().includes(contactEmail);
 }
 
+function groundedTimeMatches(messages: ExecutiveSourceMessage[], event: ExecutiveCalendarEvent) {
+  const start = new Date(event.start);
+  if (!Number.isFinite(start.getTime())) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    weekday: "long",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(start);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value || "";
+  const weekday = value("weekday");
+  const hour = value("hour");
+  const minute = value("minute");
+  const dayPeriod = value("dayPeriod").replace(/\./g, "");
+  if (!weekday || !hour || !minute || !dayPeriod) return false;
+  const groundedTime = new RegExp(`\\b${weekday}\\b[\\s\\S]{0,80}\\b${hour}(?::${minute})?\\s*${dayPeriod}\\b`, "i");
+  return messages.some(message => groundedTime.test(`${message.subject} ${message.body}`));
+}
+
 function relevantCalendarEvents(messages: ExecutiveSourceMessage[], context: ExecutiveCalendarContext) {
   const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
   const latestIncoming = [...sorted].reverse().find(message => !message.mine);
@@ -128,9 +148,7 @@ function matchingCalendarEvent(
     if (exact) return exact;
   }
   const timely = candidates.filter(event => Date.parse(event.end || event.start) >= earliestRelevantEnd);
-  const subjectMatch = timely.find(event => subjectOverlap(subject, event));
-  if (subjectMatch) return subjectMatch;
-  return timely.length === 1 ? timely[0] : null;
+  return timely.find(event => subjectOverlap(subject, event) || groundedTimeMatches(messages, event)) ?? null;
 }
 
 export function reconcileAssessmentWithCalendar(

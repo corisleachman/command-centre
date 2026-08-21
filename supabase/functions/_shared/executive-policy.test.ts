@@ -402,3 +402,37 @@ Deno.test("a recruiter meeting already in the diary is treated as complete", () 
   if (result.actions.length) throw new Error("A confirmed recruiter event should not produce follow-up work");
   if (!/already in your diary/i.test(result.summary)) throw new Error(`Calendar completion was not explained: ${result.summary}`);
 });
+
+Deno.test("an unrelated event with the same contact does not close a new meeting request", () => {
+  const messages: ExecutiveSourceMessage[] = [{
+    id: "new-call-request",
+    threadId: "separate-call-thread",
+    from: "Alex Smith <alex@example.com>",
+    to: "Coris <coris@example.com>",
+    subject: "New business planning",
+    body: "Can we arrange a call next week to discuss the proposal?",
+    date: "Thu, 20 Aug 2026 09:00:00 +0100",
+    internalDate: Date.parse("2026-08-20T09:00:00+01:00"),
+    mine: false,
+  }];
+  const calendar: ExecutiveCalendarContext = {
+    status: "available",
+    calendarId: "primary",
+    events: [{
+      id: "unrelated-event",
+      status: "confirmed",
+      summary: "Monthly finance review",
+      description: "Existing finance review with Alex",
+      htmlLink: "https://calendar.google.com/calendar/event?eid=unrelated-event",
+      start: "2026-08-25T10:00:00.000Z",
+      end: "2026-08-25T11:00:00.000Z",
+      attendeeEmails: ["alex@example.com"],
+      organiserEmail: "coris@example.com",
+      creatorEmail: "coris@example.com",
+    }],
+  };
+
+  const result = reconcileAssessmentWithCalendar(assessConversation(messages), messages, calendar);
+  if (result.newState === "meeting_scheduled") throw new Error("An unrelated event must not complete the new request");
+  if (result.attentionLevel === "silent") throw new Error("The new meeting request still needs review");
+});
