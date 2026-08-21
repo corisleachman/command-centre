@@ -588,7 +588,7 @@ async function supersedeEarlierThreadPacks(
     .update({ status: "superseded", superseded_by: supersededBy, updated_at: now })
     .eq("user_id", userId)
     .in("event_id", earlierEventIds)
-    .in("status", ["ready_for_review", "approved", "failed"]);
+    .in("status", ["ready_for_review", "approved", "executing", "failed"]);
   if (packsError) throw packsError;
 }
 
@@ -607,25 +607,6 @@ async function persistAssessment(
   const idempotencyKey = `gmail:${latestMessage.id}:${POLICY_VERSION}`;
   const now = new Date().toISOString();
 
-  const { data: existingEvent, error: existingEventError } = await admin
-    .from("executive_events")
-    .select("id,status")
-    .eq("user_id", userId)
-    .eq("idempotency_key", idempotencyKey)
-    .maybeSingle();
-  if (existingEventError) throw existingEventError;
-  if (existingEvent && (existingEvent.status === "assessed" || existingEvent.status === "ignored")) {
-    const [{ data: existingAssessment, error: existingAssessmentError }, { data: existingPack, error: existingPackError }] = await Promise.all([
-      admin.from("attention_assessments").select("id").eq("event_id", existingEvent.id).eq("policy_version", POLICY_VERSION).maybeSingle(),
-      admin.from("action_packs").select("id").eq("event_id", existingEvent.id).maybeSingle(),
-    ]);
-    if (existingAssessmentError) throw existingAssessmentError;
-    if (existingPackError) throw existingPackError;
-    if (existingAssessment) {
-      return { eventId: existingEvent.id, assessmentId: existingAssessment.id, packId: existingPack?.id ?? null, assessment };
-    }
-  }
-
   const { data: event, error: eventError } = await admin.from("executive_events").upsert({
     user_id: userId,
     source: "gmail",
@@ -642,6 +623,14 @@ async function persistAssessment(
     updated_at: now,
   }, { onConflict: "user_id,idempotency_key" }).select("id").single();
   if (eventError) throw eventError;
+
+  const { data: existingPack, error: existingPackError } = await admin
+    .from("action_packs")
+    .select("id,status")
+    .eq("user_id", userId)
+    .eq("event_id", event.id)
+    .maybeSingle();
+  if (existingPackError) throw existingPackError;
 
   const { data: assessmentRow, error: assessmentError } = await admin.from("attention_assessments").upsert({
     user_id: userId,
@@ -669,8 +658,36 @@ async function persistAssessment(
 
   if (assessment.attentionLevel === "silent" || !assessment.actions.length) {
     await supersedeEarlierThreadPacks(admin, userId, latestMessage.threadId, event.id, now);
+    const { data: currentPacks, error: currentPacksError } = await admin
+      .from("action_packs")
+      .update({ status: "superseded", superseded_by: null, updated_at: now })
+      .eq("user_id", userId)
+      .eq("event_id", event.id)
+      .in("status", ["ready_for_review", "approved", "executing", "failed"])
+      .select("id");
+    if (currentPacksError) throw currentPacksError;
+    const currentPackIds = (currentPacks ?? []).map(pack => pack.id);
+    if (currentPackIds.length) {
+      const [{ error: itemsError }, { error: notificationsError }] = await Promise.all([
+        admin.from("action_items")
+          .update({ approval_status: "not_required", execution_status: "cancelled", last_error: null, updated_at: now })
+          .in("action_pack_id", currentPackIds)
+          .neq("execution_status", "completed"),
+        admin.from("executive_notifications")
+          .update({ status: "dismissed", updated_at: now })
+          .in("action_pack_id", currentPackIds)
+          .eq("status", "pending"),
+      ]);
+      if (itemsError) throw itemsError;
+      if (notificationsError) throw notificationsError;
+    }
     await admin.from("executive_events").update({ status: "ignored", processed_at: now, updated_at: now }).eq("id", event.id);
-    return { eventId: event.id, assessmentId: assessmentRow.id, packId: null, assessment };
+    return { eventId: event.id, assessmentId: assessmentRow.id, packId: null, assessment, model: interpreted.model };
+  }
+
+  if (existingPack && ["completed", "dismissed", "superseded"].includes(existingPack.status)) {
+    await admin.from("executive_events").update({ status: "assessed", processed_at: now, updated_at: now }).eq("id", event.id);
+    return { eventId: event.id, assessmentId: assessmentRow.id, packId: null, assessment, model: interpreted.model };
   }
 
   const { data: pack, error: packError } = await admin.from("action_packs").upsert({
@@ -693,6 +710,12 @@ async function persistAssessment(
   }, { onConflict: "event_id,assessment_id" }).select("id").single();
   if (packError) throw packError;
   await supersedeEarlierThreadPacks(admin, userId, latestMessage.threadId, event.id, now, pack.id);
+
+  const { error: resetItemsError } = await admin.from("action_items")
+    .update({ approval_status: "not_required", execution_status: "cancelled", last_error: null, updated_at: now })
+    .eq("action_pack_id", pack.id)
+    .neq("execution_status", "completed");
+  if (resetItemsError) throw resetItemsError;
 
   for (const action of assessment.actions) {
     const contentHash = await hashContent(action.content);
@@ -731,7 +754,7 @@ async function persistAssessment(
   if (notificationResult.error) throw notificationResult.error;
 
   await admin.from("executive_events").update({ status: "assessed", processed_at: now, updated_at: now }).eq("id", event.id);
-  return { eventId: event.id, assessmentId: assessmentRow.id, packId: pack.id, assessment };
+  return { eventId: event.id, assessmentId: assessmentRow.id, packId: pack.id, assessment, model: interpreted.model };
 }
 
 async function retainLatestIncomingPreparation(
@@ -798,13 +821,43 @@ async function retainLatestIncomingPreparation(
   return retainedPacks?.length ? historical.packId : null;
 }
 
+async function activePackThreadIds(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+) {
+  const { data: packs, error: packsError } = await admin
+    .from("action_packs")
+    .select("event_id")
+    .eq("user_id", userId)
+    .in("status", ["ready_for_review", "executing", "failed"])
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  if (packsError) throw packsError;
+  const eventIds = [...new Set((packs ?? []).map(pack => stringValue(pack.event_id)).filter(Boolean))];
+  if (!eventIds.length) return [];
+  const { data: events, error: eventsError } = await admin
+    .from("executive_events")
+    .select("entity_id")
+    .eq("user_id", userId)
+    .eq("source", "gmail")
+    .eq("entity_type", "gmail_thread")
+    .in("id", eventIds);
+  if (eventsError) throw eventsError;
+  return [...new Set((events ?? []).map(event => stringValue(event.entity_id)).filter(Boolean))];
+}
+
 async function scanInbox(admin: ReturnType<typeof createClient>, userId: string, maxResultsInput = 10) {
   const token = await accessToken(admin, userId);
   const calendarContext = await loadExecutiveCalendarContext(admin, userId, token);
   const maxResults = Math.min(Math.max(Number(maxResultsInput || 10), 1), 15);
   const query = "newer_than:3d {label:inbox label:sent} -category:promotions -category:social -category:forums";
-  const list = await gmailFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, token);
-  const threadIds = [...new Set((list.messages ?? []).map((message: any) => String(message.threadId || "")).filter(Boolean))];
+  const [list, visibleThreadIds] = await Promise.all([
+    gmailFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, token),
+    activePackThreadIds(admin, userId),
+  ]);
+  const recentThreadIds = [...new Set((list.messages ?? []).map((message: any) => String(message.threadId || "")).filter(Boolean))];
+  const staleVisibleThreadIds = visibleThreadIds.filter(threadId => !recentThreadIds.includes(threadId));
+  const threadIds = [...recentThreadIds, ...staleVisibleThreadIds];
   const results = [];
   for (const threadId of threadIds) {
     try {
@@ -812,15 +865,24 @@ async function scanInbox(admin: ReturnType<typeof createClient>, userId: string,
       const sourceUrl = `https://mail.google.com/mail/u/0/#all/${threadId}`;
       const current = await persistAssessment(admin, userId, messages, sourceUrl, calendarContext);
       const retainedPackId = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl, calendarContext);
-      results.push({ ...current, retainedPackId });
+      results.push({ ...current, retainedPackId, source: recentThreadIds.includes(threadId) ? "recent" : "visible_pack" });
     } catch (error) {
       results.push({ threadId, error: error instanceof Error ? error.message : "Unable to assess thread." });
     }
   }
+  const completedResults = results.filter((result: any) => !result.error);
   return {
-    checked: threadIds.length,
+    checked: recentThreadIds.length,
+    revisited: staleVisibleThreadIds.length,
     prepared: results.filter((result: any) => Boolean(result.packId)).length,
     retained: results.filter((result: any) => Boolean(result.retainedPackId)).length,
+    intelligence: {
+      gatewayConfigured: Boolean(Deno.env.get("AI_GATEWAY_API_KEY")),
+      gatewayUsed: completedResults.filter((result: any) => result.model?.provider === "vercel-ai-gateway").length,
+      gatewayErrors: completedResults.filter((result: any) => result.model?.reason === "gateway_error").length,
+      gatewayNotConfigured: completedResults.filter((result: any) => result.model?.reason === "not_configured").length,
+      deterministic: completedResults.filter((result: any) => result.model?.reason === "deterministic_gate").length,
+    },
     results,
   };
 }

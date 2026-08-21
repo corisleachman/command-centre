@@ -386,7 +386,7 @@ Deno.test("a recruiter meeting already in the diary is treated as complete", () 
     events: [{
       id: "hypefy-interview",
       status: "confirmed",
-      summary: "Second-round interview with Hypefy",
+      summary: "Interview with Filip and Katarina",
       description: "Interview with Katarina and Filip",
       htmlLink: "https://calendar.google.com/calendar/event?eid=hypefy-interview",
       start: "2026-08-21T08:00:00.000Z",

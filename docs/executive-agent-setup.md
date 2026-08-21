@@ -111,6 +111,8 @@ The application tables and UI do not depend on a particular model vendor. If the
 
 When Calendar access is available, a matching existing event is authoritative. The assessment becomes `meeting_scheduled`, any stale reply or invitation is removed, and the action pack is superseded. If Calendar cannot be read, email assessment continues and records the unavailable context for the model rather than failing the inbox scan.
 
+Manual Gmail rechecks cover both the recent inbox window and every action pack still visible in Attention. This lets a later reply, diary event or improved policy retire an older card even when its Gmail thread is no longer recent. The recheck result also reports whether AI Gateway was configured, used or replaced by the deterministic fallback. A missing key or failed Gateway request is shown as an on-screen notice rather than silently presenting pattern-based output as model judgement.
+
 ## James Kape meeting case
 
 For a thread where Coris proposes Friday at 2 p.m., previously describes the call as 15–20 minutes, and James replies "Yeah let's do it, you ok to send an invite?", the expected result is:

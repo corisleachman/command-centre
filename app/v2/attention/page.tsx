@@ -323,11 +323,29 @@ export default function AttentionCentrePage() {
     setBusy("recheck");
     setError("");
     setMessage("");
+    setActionNotice(null);
     try {
       const result = await syncExecutiveInbox(supabase, 15);
       await load(false);
       const recovered = result.retained ? ` ${result.retained} replied conversation${result.retained === 1 ? " was" : "s were"} updated so the remaining follow-on work stays available.` : "";
-      setMessage(`Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.${recovered}`);
+      const revisited = result.revisited ? ` ${result.revisited} existing review item${result.revisited === 1 ? " was" : "s were"} reassessed against the latest email and diary context.` : "";
+      const summary = `Gmail rechecked. ${result.checked} recent conversation${result.checked === 1 ? "" : "s"} assessed.${revisited}${recovered}`;
+      if (!result.intelligence.gatewayConfigured || result.intelligence.gatewayNotConfigured) {
+        setActionNotice({
+          tone: "error",
+          title: "Gmail was checked, but AI judgement wasn't connected",
+          message: `${summary} Supabase couldn't see AI_GATEWAY_API_KEY, so the safe pattern-based assessment was used.`,
+        });
+      } else if (result.intelligence.gatewayErrors) {
+        setActionNotice({
+          tone: "error",
+          title: "Gmail was checked, but AI Gateway couldn't assess it",
+          message: `${summary} ${result.intelligence.gatewayErrors} conversation${result.intelligence.gatewayErrors === 1 ? "" : "s"} fell back to safe rules. Check the Gateway request log, key and credit balance.`,
+        });
+      } else {
+        const modelUse = result.intelligence.gatewayUsed ? ` Full-thread AI assessed ${result.intelligence.gatewayUsed} conversation${result.intelligence.gatewayUsed === 1 ? "" : "s"}.` : "";
+        setMessage(`${summary}${modelUse}`);
+      }
     } catch (reason) {
       setActionNotice({ tone: "error", title: "Gmail recheck failed", message: reason instanceof Error ? reason.message : "The inbox couldn't be rechecked." });
     } finally {
