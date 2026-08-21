@@ -4,6 +4,7 @@ type ModelInfo = {
   provider: string;
   name: string;
   version: string;
+  reason?: "deterministic_gate" | "not_configured" | "gateway_error";
 };
 
 export type InterpretedConversation = {
@@ -126,7 +127,10 @@ function matchingCalendarEvent(
     const exact = candidates.find(event => Math.abs(Date.parse(event.start) - proposalTime) <= 90 * 60_000);
     if (exact) return exact;
   }
-  return candidates.find(event => Date.parse(event.end || event.start) >= earliestRelevantEnd && subjectOverlap(subject, event)) ?? null;
+  const timely = candidates.filter(event => Date.parse(event.end || event.start) >= earliestRelevantEnd);
+  const subjectMatch = timely.find(event => subjectOverlap(subject, event));
+  if (subjectMatch) return subjectMatch;
+  return timely.length === 1 ? timely[0] : null;
 }
 
 export function reconcileAssessmentWithCalendar(
@@ -377,13 +381,13 @@ export async function assessConversationWithIntelligence(
   const fallback = assessConversation(messages);
   const reconciledFallback = reconcileAssessmentWithCalendar(fallback, messages, calendarContext);
   if (fallback.category === "noise" || fallback.newState === "waiting_for_reply") {
-    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4", reason: "deterministic_gate" } };
   }
   const apiKey = Deno.env.get("AI_GATEWAY_API_KEY") || "";
   const modelName = Deno.env.get("EXECUTIVE_AGENT_MODEL") || "openai/gpt-5.4";
   if (!apiKey) {
     console.warn("[executive-agent] AI_GATEWAY_API_KEY is not configured; deterministic policy retained", { model: modelName });
-    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4", reason: "not_configured" } };
   }
 
   const controller = new AbortController();
@@ -413,7 +417,7 @@ export async function assessConversationWithIntelligence(
       model: modelName,
       detail: error instanceof Error ? error.message : "Unknown model failure",
     });
-    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4", reason: "gateway_error" } };
   } finally {
     clearTimeout(timeout);
   }

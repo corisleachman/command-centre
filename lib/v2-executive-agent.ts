@@ -245,7 +245,19 @@ export async function syncExecutiveInbox(client: SupabaseClient, maxResults = 10
   const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "scanInbox", maxResults } });
   if (error) throw new Error(await functionErrorMessage(error, data));
   if (data?.error) throw new Error(data.error);
-  return data as { checked: number; prepared: number; retained: number };
+  return data as {
+    checked: number;
+    revisited: number;
+    prepared: number;
+    retained: number;
+    intelligence: {
+      gatewayConfigured: boolean;
+      gatewayUsed: number;
+      gatewayErrors: number;
+      gatewayNotConfigured: number;
+      deterministic: number;
+    };
+  };
 }
 
 export async function markExecutivePackRead(client: SupabaseClient, userId: string, packId: string) {
