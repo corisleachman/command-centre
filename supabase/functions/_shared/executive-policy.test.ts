@@ -1,4 +1,5 @@
 import { assessConversation, type ExecutiveSourceMessage } from "./executive-policy.ts";
+import { reconcileAssessmentWithCalendar, type ExecutiveCalendarContext } from "./executive-intelligence.ts";
 
 const now = Date.now();
 
@@ -316,4 +317,88 @@ Deno.test("an accepted meeting without a safe date stays with Coris for judgemen
   if (result.newState !== "meeting_agreed_invite_pending") throw new Error(`Unexpected state: ${result.newState}`);
   if (!result.missingFacts.includes("Confirmed meeting date and time")) throw new Error("Missing meeting time was not surfaced");
   if (result.actions.some(action => action.type === "calendar_proposal")) throw new Error("No calendar event should be invented without a time");
+});
+
+Deno.test("an existing James Kape diary event removes the stale reply and invite", () => {
+  const messages: ExecutiveSourceMessage[] = [
+    {
+      id: "proposal",
+      threadId: "james-kape-calendar-thread",
+      from: "Coris <coris@example.com>",
+      to: "James Kape <james@omse.co>",
+      subject: "Re: Fractional new business support",
+      body: "How about Friday afternoon, around 2 p.m.?",
+      date: "Wed, 19 Aug 2026 09:00:00 +0100",
+      internalDate: Date.parse("2026-08-19T09:00:00+01:00"),
+      mine: true,
+    },
+    {
+      id: "acceptance",
+      threadId: "james-kape-calendar-thread",
+      from: "James Kape <james@omse.co>",
+      to: "Coris <coris@example.com>",
+      subject: "Re: Fractional new business support",
+      body: "Yeah let's do it. You okay to send an invite?",
+      date: "Wed, 19 Aug 2026 09:01:00 +0100",
+      internalDate: Date.parse("2026-08-19T09:01:00+01:00"),
+      mine: false,
+    },
+  ];
+  const calendar: ExecutiveCalendarContext = {
+    status: "available",
+    calendarId: "primary",
+    events: [{
+      id: "james-event",
+      status: "confirmed",
+      summary: "Fractional new business support with James Kape",
+      description: "Call agreed by email",
+      htmlLink: "https://calendar.google.com/calendar/event?eid=james-event",
+      start: "2026-08-21T13:00:00.000Z",
+      end: "2026-08-21T13:20:00.000Z",
+      attendeeEmails: ["james@omse.co"],
+      organiserEmail: "coris@example.com",
+      creatorEmail: "coris@example.com",
+    }],
+  };
+
+  const result = reconcileAssessmentWithCalendar(assessConversation(messages), messages, calendar);
+  if (result.newState !== "meeting_scheduled") throw new Error(`Unexpected state: ${result.newState}`);
+  if (result.attentionLevel !== "silent") throw new Error(`Scheduled meeting should be silent, got ${result.attentionLevel}`);
+  if (result.actions.length) throw new Error("An existing diary event should remove the stale reply and invitation");
+  if (!result.evidence.some(item => item.label === "Matching Google Calendar event")) throw new Error("Calendar evidence was not retained");
+});
+
+Deno.test("a recruiter meeting already in the diary is treated as complete", () => {
+  const messages: ExecutiveSourceMessage[] = [{
+    id: "recruiter-follow-up",
+    threadId: "recruiter-thread",
+    from: "Katarina Modric <katarina@hypefy.ai>",
+    to: "Coris <coris@example.com>",
+    subject: "Second-round interview with Hypefy",
+    body: "Friday at 9am UK time works. I will send the diary invitation.",
+    date: "Thu, 20 Aug 2026 09:00:00 +0100",
+    internalDate: Date.parse("2026-08-20T09:00:00+01:00"),
+    mine: false,
+  }];
+  const calendar: ExecutiveCalendarContext = {
+    status: "available",
+    calendarId: "primary",
+    events: [{
+      id: "hypefy-interview",
+      status: "confirmed",
+      summary: "Second-round interview with Hypefy",
+      description: "Interview with Katarina and Filip",
+      htmlLink: "https://calendar.google.com/calendar/event?eid=hypefy-interview",
+      start: "2026-08-21T08:00:00.000Z",
+      end: "2026-08-21T09:00:00.000Z",
+      attendeeEmails: ["coris@example.com", "katarina@hypefy.ai"],
+      organiserEmail: "katarina@hypefy.ai",
+      creatorEmail: "katarina@hypefy.ai",
+    }],
+  };
+
+  const result = reconcileAssessmentWithCalendar(assessConversation(messages), messages, calendar);
+  if (result.newState !== "meeting_scheduled") throw new Error(`Unexpected state: ${result.newState}`);
+  if (result.actions.length) throw new Error("A confirmed recruiter event should not produce follow-up work");
+  if (!/already in your diary/i.test(result.summary)) throw new Error(`Calendar completion was not explained: ${result.summary}`);
 });
