@@ -1,4 +1,293 @@
-YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíãŞ;N‹Z–‹­¦ëeŠw¬Õ¥µÁ½ÉĞÑåÁ”ìMÕÁ…‰…Í•±¥•¹Ğô™É½´€‰ÍÕÁ…‰…Í”½ÍÕÁ…‰…Í”µ©Ìˆì()•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•ÑÑ•¹Ñ¥½¹1•Ù•°€ô€‰¥¹Ñ•ÉÉÕÁÑ}¹½Üˆğ€‰Ñ½Á}½™}Ñ½‘…äˆğ€‰µ½É¹¥¹}‰É¥•˜ˆğ€‰Í¥±•¹Ğˆì)•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•A…­MÑ…ÑÕÌ€ô€‰ÁÉ•Á…É¥¹œˆğ€‰É•…‘å}™½É}É•Ù¥•Üˆğ€‰…ÁÁÉ½Ù•ˆğ€‰•á•ÕÑ¥¹œˆğ€‰½µÁ±•Ñ•ˆğ€‰‘¥Íµ¥ÍÍ•ˆğ€‰™…¥±•ˆğ€‰ÍÕÁ•ÉÍ•‘•ˆì)•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•Ñ¥½¹QåÁ”€ô€‰É•Á±å}‘É…™Ğˆğ€‰‘½Õµ•¹Ñ}‘É…™Ğˆğ€‰µ••Ñ¥¹}‰É¥•˜ˆğ€‰…±•¹‘…É}ÁÉ½Á½Í…°ˆğ€‰Ñ…Í­}É•…Ñ”ˆğ€‰Ñ…Í­}É•ÁÉ¥½É¥Ñ¥Í”ˆğ€‰½ÁÁ½ÉÑÕ¹¥Ñå}Á…Ñ ˆğ€‰™½±±½İ}ÕÁ}Í¡•‘Õ±”ˆğ€‰µ•ÑÉ¥}•¹ÑÉäˆğ€‰¹½Ñ¥™¥…Ñ¥½¸ˆì)•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•••‘‰…­QåÁ”€ô€‰½ÉÉ•Ñ}ÕÍ•™Õ°ˆğ€‰¥µÁ½ÉÑ…¹Ñ}¹½}¥¹Ñ•ÉÉÕÁĞˆğ€‰Í¡½Õ±‘}¥¹Ñ•ÉÉÕÁĞˆğ€‰¹½Ñ}¥µÁ½ÉÑ…¹Ğˆğ€‰İÉ½¹}¥¹Ñ•ÉÁÉ•Ñ…Ñ¥½¸ˆğ€‰‘É…™Ñ}‘¥É•Ñ¥½¸ˆì()•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•Ù¥‘•¹”€ôì(€±…‰•°üèÍÑÉ¥¹œì(€ÅÕ½Ñ”üèÍÑÉ¥¹œì(€Í½ÕÉ”üèÍÑÉ¥¹œì)ôì()•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•Ñ¥½¹%Ñ•´€ôì(€¥èÍÑÉ¥¹œì(€…Ñ¥½¹QåÁ”èá•ÕÑ¥Ù•Ñ¥½¹QåÁ”ì(€Ñ¥Ñ±”èÍÑÉ¥¹œì(€½¹Ñ•¹ĞèI•½ÉñÍÑÉ¥¹œ°Õ¹­¹½İ¸øì(€½¹Ñ•¹ÑY•ÉÍ¥½¸è¹Õµ‰•Èì(€½¹Ñ•¹Ñ!…Í èÍÑÉ¥¹œì(€…ÁÁÉ½Ù…±I•ÅÕ¥É•è‰½½±•…¸ì(€…ÁÁÉ½Ù…±MÑ…ÑÕÌè€‰Á•¹‘¥¹œˆğ€‰…ÁÁÉ½Ù•ˆğ€‰É•©•Ñ•ˆğ€‰¹½Ñ}É•ÅÕ¥É•ˆì(€•á•ÕÑ¥½¹MÑ…ÑÕÌè€‰¹½Ñ}ÍÑ…ÉÑ•ˆğ€‰ÅÕ•Õ•ˆğ€‰•á•ÕÑ¥¹œˆğ€‰½µÁ±•Ñ•ˆğ€‰™…¥±•ˆğ€‰…¹•±±•ˆì(€•áÑ•É¹…±I•ÍÕ±ÑI•™•É•¹”èÍÑÉ¥¹œğ¹Õ±°ì(€±…ÍÑÉÉ½ÈèÍÑÉ¥¹œğ¹Õ±°ì(€Á½Í¥Ñ¥½¸è¹Õµ‰•Èì)ôì()•áÁ½ÉĞÑåÁ”á•ÕÑ¥Ù•Ñ¥½¹A…¬€ôì(€¥èÍÑÉ¥¹œì(€•Ù•¹Ñ%èÍÑÉ¥¹œì(€…ÍÍ•ÍÍµ•¹Ñ%èÍÑÉ¥¹œì(€Ñ¥Ñ±”èÍÑÉ¥¹œì(€•á•ÕÑ¥Ù•MÕµµ…ÉäèÍÑÉ¥¹œì(€İ¡å9½ÜèÍÑÉ¥¹œğ¹Õ±°ì(€ÍÑ…ÑÕÌèá•ÕÑ¥Ù•A…­MÑ…ÑÕÌì(€…ÑÑ•¹Ñ¥½¹1•Ù•°èá•ÕÑ¥Ù•ÑÓxîÚ$z{-®éÜj×ckType: ExecutiveFeedbackType,
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export type ExecutiveAttentionLevel = "interrupt_now" | "top_of_today" | "morning_brief" | "silent";
+export type ExecutivePackStatus = "preparing" | "ready_for_review" | "approved" | "executing" | "completed" | "dismissed" | "failed" | "superseded";
+export type ExecutiveActionType = "reply_draft" | "document_draft" | "meeting_brief" | "calendar_proposal" | "task_create" | "task_reprioritise" | "opportunity_patch" | "follow_up_schedule" | "metric_entry" | "notification";
+export type ExecutiveFeedbackType = "correct_useful" | "important_no_interrupt" | "should_interrupt" | "not_important" | "wrong_interpretation" | "draft_direction";
+
+export type ExecutiveEvidence = {
+  label?: string;
+  quote?: string;
+  source?: string;
+};
+
+export type ExecutiveActionItem = {
+  id: string;
+  actionType: ExecutiveActionType;
+  title: string;
+  content: Record<string, unknown>;
+  contentVersion: number;
+  contentHash: string;
+  approvalRequired: boolean;
+  approvalStatus: "pending" | "approved" | "rejected" | "not_required";
+  executionStatus: "not_started" | "queued" | "executing" | "completed" | "failed" | "cancelled";
+  externalResultReference: string | null;
+  lastError: string | null;
+  position: number;
+};
+
+export type ExecutiveActionPack = {
+  id: string;
+  eventId: string;
+  assessmentId: string;
+  title: string;
+  executiveSummary: string;
+  whyNow: string | null;
+  status: ExecutivePackStatus;
+  attentionLevel: ExecutiveAttentionLevel;
+  reviewBy: string | null;
+  contactName: string | null;
+  organisationName: string | null;
+  sourceUrl: string | null;
+  missingFacts: string[];
+  proposedChanges: Array<Record<string, unknown>>;
+  confidence: number;
+  readAt: string | null;
+  snoozedUntil: string | null;
+  createdAt: string;
+  updatedAt: string;
+  assessment: {
+    category: string;
+    summary: string;
+    previousState: string | null;
+    newState: string | null;
+    changes: Array<Record<string, unknown>>;
+    explicitRequests: string[];
+    evidence: ExecutiveEvidence[];
+    consequenceOfDelay: string | null;
+    attentionScore: number;
+    modelProvider: string;
+    modelName: string | null;
+    modelVersion: string | null;
+  } | null;
+  items: ExecutiveActionItem[];
+};
+
+export type ExecutiveBriefEntry = {
+  pack_id: string;
+  title: string;
+  summary: string;
+  attention_level: ExecutiveAttentionLevel;
+  review_by: string | null;
+  contact: string | null;
+  prepared_items: number;
+  pending_approvals: number;
+};
+
+export type ExecutiveBrief = {
+  id: string;
+  briefDate: string;
+  title: string;
+  generatedAt: string;
+  content: {
+    commercial_movement: ExecutiveBriefEntry[];
+    prepared_work: ExecutiveBriefEntry[];
+    can_wait: ExecutiveBriefEntry[];
+    suppressed_noise_count: number;
+  };
+};
+
+type Row = Record<string, unknown>;
+
+function asString(value: unknown) { return typeof value === "string" ? value : ""; }
+function asNullableString(value: unknown) { return typeof value === "string" && value ? value : null; }
+function asNumber(value: unknown) { return typeof value === "number" ? value : Number(value || 0); }
+function asBoolean(value: unknown) { return value === true; }
+function asRows(value: unknown) { return Array.isArray(value) ? value.filter(item => item && typeof item === "object") as Row[] : []; }
+function asStrings(value: unknown) { return Array.isArray(value) ? value.filter(item => typeof item === "string") as string[] : []; }
+
+async function functionErrorMessage(error: unknown, data: unknown) {
+  if (data && typeof data === "object" && typeof (data as { error?: unknown }).error === "string") return (data as { error: string }).error;
+  const context = (error as { context?: Response } | null)?.context;
+  if (context instanceof Response) {
+    try {
+      const payload = await context.clone().json() as { error?: unknown; message?: unknown };
+      if (typeof payload.error === "string" && payload.error) return payload.error;
+      if (typeof payload.message === "string" && payload.message) return payload.message;
+    } catch {
+      try {
+        const detail = (await context.clone().text()).trim();
+        if (detail) return detail;
+      } catch { /* Fall through to the client error below. */ }
+    }
+  }
+  return error instanceof Error ? error.message : "The server action failed without an explanation.";
+}
+
+function parseItem(row: Row): ExecutiveActionItem {
+  const approvals = asRows(row.approvals).sort((left, right) => asString(right.decided_at).localeCompare(asString(left.decided_at)));
+  const latestAmendments = approvals[0]?.amendments && typeof approvals[0].amendments === "object" ? approvals[0].amendments as Record<string, unknown> : {};
+  const content = row.content && typeof row.content === "object" ? { ...row.content as Record<string, unknown> } : {};
+  const hasApprovedText = Object.prototype.hasOwnProperty.call(latestAmendments, "prepared_text");
+  const approvedText = asString(latestAmendments.prepared_text);
+  if (hasApprovedText) {
+    const actionType = asString(row.action_type);
+    if (actionType === "reply_draft") content.body = approvedText;
+    else if (actionType === "document_draft" || actionType === "meeting_brief") content.markdown = approvedText;
+    else content.text = approvedText;
+  }
+  return {
+    id: asString(row.id),
+    actionType: asString(row.action_type) as ExecutiveActionType,
+    title: asString(row.title),
+    content,
+    contentVersion: asNumber(row.content_version),
+    contentHash: asString(row.content_hash),
+    approvalRequired: asBoolean(row.approval_required),
+    approvalStatus: asString(row.approval_status) as ExecutiveActionItem["approvalStatus"],
+    executionStatus: asString(row.execution_status) as ExecutiveActionItem["executionStatus"],
+    externalResultReference: asNullableString(row.external_result_reference),
+    lastError: asNullableString(row.last_error),
+    position: asNumber(row.position),
+  };
+}
+
+function parsePack(row: Row): ExecutiveActionPack {
+  const assessmentRows = asRows(row.assessment);
+  const assessmentRow = assessmentRows[0] ?? (row.assessment && typeof row.assessment === "object" ? row.assessment as Row : null);
+  const items = asRows(row.items).map(parseItem).sort((a, b) => a.position - b.position);
+  return {
+    id: asString(row.id),
+    eventId: asString(row.event_id),
+    assessmentId: asString(row.assessment_id),
+    title: asString(row.title),
+    executiveSummary: asString(row.executive_summary),
+    whyNow: asNullableString(row.why_now),
+    status: asString(row.status) as ExecutivePackStatus,
+    attentionLevel: asString(row.attention_level) as ExecutiveAttentionLevel,
+    reviewBy: asNullableString(row.review_by),
+    contactName: asNullableString(row.contact_name),
+    organisationName: asNullableString(row.organisation_name),
+    sourceUrl: asNullableString(row.source_url),
+    missingFacts: asStrings(row.missing_facts),
+    proposedChanges: asRows(row.proposed_changes),
+    confidence: asNumber(row.confidence),
+    readAt: asNullableString(row.read_at),
+    snoozedUntil: asNullableString(row.snoozed_until),
+    createdAt: asString(row.created_at),
+    updatedAt: asString(row.updated_at),
+    assessment: assessmentRow ? {
+      category: asString(assessmentRow.category),
+      summary: asString(assessmentRow.summary),
+      previousState: asNullableString(assessmentRow.previous_state),
+      newState: asNullableString(assessmentRow.new_state),
+      changes: asRows(assessmentRow.changes),
+      explicitRequests: asStrings(assessmentRow.explicit_requests),
+      evidence: asRows(assessmentRow.evidence).map(item => ({ label: asNullableString(item.label) ?? undefined, quote: asNullableString(item.quote) ?? undefined, source: asNullableString(item.source) ?? undefined })),
+      consequenceOfDelay: asNullableString(assessmentRow.consequence_of_delay),
+      attentionScore: asNumber(assessmentRow.attention_score),
+      modelProvider: asString(assessmentRow.model_provider),
+      modelName: asNullableString(assessmentRow.model_name),
+      modelVersion: asNullableString(assessmentRow.model_version),
+    } : null,
+    items,
+  };
+}
+
+export async function loadExecutiveActionPacks(
+  client: SupabaseClient,
+  userId: string,
+  options: { limit?: number; includeCompleted?: boolean } = {},
+) {
+  let query = client
+    .from("action_packs")
+    .select(`
+      id,event_id,assessment_id,title,executive_summary,why_now,status,attention_level,review_by,
+      contact_name,organisation_name,source_url,missing_facts,proposed_changes,confidence,
+      read_at,snoozed_until,created_at,updated_at,
+      assessment:attention_assessments(category,summary,previous_state,new_state,changes,explicit_requests,evidence,consequence_of_delay,attention_score,model_provider,model_name,model_version),
+      items:action_items(id,action_type,title,content,content_version,content_hash,approval_required,approval_status,execution_status,external_result_reference,last_error,position,approvals:action_approvals(amendments,decided_at))
+    `)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(options.limit ?? 20);
+
+  if (!options.includeCompleted) {
+    query = query.in("status", ["ready_for_review", "executing", "failed"]);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  const now = Date.now();
+  return (data ?? [])
+    .map(row => parsePack(row as Row))
+    .filter(pack => !pack.snoozedUntil || new Date(pack.snoozedUntil).getTime() <= now);
+}
+
+export async function loadTodaysExecutiveBrief(client: SupabaseClient, userId: string) {
+  const briefDate = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/London" });
+  const { data, error } = await client.from("executive_briefs").select("id,brief_date,title,content,generated_at").eq("user_id", userId).eq("brief_date", briefDate).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const content = data.content && typeof data.content === "object" ? data.content as Record<string, unknown> : {};
+  return {
+    id: asString(data.id),
+    briefDate: asString(data.brief_date),
+    title: asString(data.title),
+    generatedAt: asString(data.generated_at),
+    content: {
+      commercial_movement: asRows(content.commercial_movement) as unknown as ExecutiveBriefEntry[],
+      prepared_work: asRows(content.prepared_work) as unknown as ExecutiveBriefEntry[],
+      can_wait: asRows(content.can_wait) as unknown as ExecutiveBriefEntry[],
+      suppressed_noise_count: asNumber(content.suppressed_noise_count),
+    },
+  } satisfies ExecutiveBrief;
+}
+
+export async function prepareExecutiveThread(client: SupabaseClient, threadId: string) {
+  const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "prepareThread", threadId } });
+  if (error) throw new Error(await functionErrorMessage(error, data));
+  if (data?.error) throw new Error(data.error);
+  return data as { eventId: string; assessmentId: string; packId: string | null; assessment: { summary: string; attentionLevel: ExecutiveAttentionLevel } };
+}
+
+export async function syncExecutiveInbox(client: SupabaseClient, maxResults = 10) {
+  const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "scanInbox", maxResults } });
+  if (error) throw new Error(await functionErrorMessage(error, data));
+  if (data?.error) throw new Error(data.error);
+  return data as { checked: number; prepared: number; retained: number };
+}
+
+export async function markExecutivePackRead(client: SupabaseClient, userId: string, packId: string) {
+  void userId;
+  const { error } = await client.rpc("manage_executive_action_pack", { p_action_pack_id: packId, p_action: "read" });
+  if (error) throw error;
+}
+
+export async function snoozeExecutivePack(client: SupabaseClient, userId: string, packId: string, until: string) {
+  void userId;
+  const { error } = await client.rpc("manage_executive_action_pack", { p_action_pack_id: packId, p_action: "snooze", p_snoozed_until: until });
+  if (error) throw error;
+}
+
+export async function dismissExecutivePack(client: SupabaseClient, userId: string, packId: string, reason: string) {
+  void userId;
+  const { error } = await client.rpc("manage_executive_action_pack", { p_action_pack_id: packId, p_action: "dismiss", p_reason: reason });
+  if (error) throw error;
+}
+
+export async function approveExecutiveActionItem(client: SupabaseClient, item: ExecutiveActionItem, amendments: Record<string, unknown> = {}) {
+  const { data, error } = await client.rpc("approve_executive_action_item", {
+    p_action_item_id: item.id,
+    p_content_hash: item.contentHash,
+    p_amendments: amendments,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function executeApprovedExecutiveActionItem(client: SupabaseClient, itemId: string) {
+  const { data, error } = await client.functions.invoke("executive-agent-api", { body: { action: "executeApprovedAction", itemId } });
+  if (error) throw new Error(await functionErrorMessage(error, data));
+  if (data?.error) throw new Error(data.error);
+  return data as { status: "completed"; actionType: ExecutiveActionType; externalReference: string | null; message: string };
+}
+
+export async function submitExecutiveFeedback(
+  client: SupabaseClient,
+  userId: string,
+  pack: ExecutiveActionPack,
+  feedbackType: ExecutiveFeedbackType,
   note = "",
 ) {
   const { error } = await client.from("executive_feedback").insert({
