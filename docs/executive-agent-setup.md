@@ -24,6 +24,7 @@ The agent prepares every action before it commits anything. Supported actions ca
 - A stale or missing immutable approval cannot execute.
 - Completed actions retain their external reference for audit and access from Recent history.
 - If Coris replies directly in Gmail, the reply draft is marked handled while prepared follow-on decisions remain available.
+- Before preparing a reply or diary invitation, the assessment reads the selected Google Calendar and removes work that an existing event proves has already been completed.
 - Sharing documents, changing CRM opportunities and activating follow-up automation are not enabled in this slice.
 
 After deployment, reconnect Google once from `/v2/gmail` to grant the additional `https://www.googleapis.com/auth/drive.file` scope before testing document creation.
@@ -96,16 +97,19 @@ The database already includes the Gmail history, watch-expiry and recovery-sync 
 
 ## Thread intelligence
 
-The `revenue-ea-v4` policy uses a hybrid path:
+The `revenue-ea-v5` policy uses a hybrid path:
 
 - hard safety rules suppress automated mail, avoid repeat work after Coris has replied and handle agreed meeting invitations from the full thread;
+- a calendar-first reconciliation pass matches the external contact, grounded meeting time and conversation subject against existing events before deciding that work remains;
 - a server-side model adapter can interpret less predictable conversations using validated JSON output;
 - unsafe recipients, invalid calendar times and ungrounded calendar actions are rejected before they reach an action pack;
 - if the model is unavailable, slow or returns unsafe output, the deterministic policy remains in force.
 
-To enable the model adapter, add a Supabase Edge Function secret named `AI_GATEWAY_API_KEY`. The optional `EXECUTIVE_AGENT_MODEL` secret chooses the model and defaults to `openai/gpt-5.4`. The key is never sent to the browser. Adding the key means full email-thread text is sent from the Edge Function to Vercel AI Gateway and the selected model provider for interpretation.
+To enable the model adapter, add a Supabase Edge Function secret named `AI_GATEWAY_API_KEY`. The optional `EXECUTIVE_AGENT_MODEL` secret chooses the model and defaults to `openai/gpt-5.4`. The key is never sent to the browser. Adding the key means full email-thread text and the calendar events involving that contact are sent from the Edge Function to Vercel AI Gateway and the selected model provider for interpretation.
 
 The application tables and UI do not depend on a particular model vendor. If the key is not configured, all other behaviour, including the agreed-meeting flow, continues with the deterministic policy.
+
+When Calendar access is available, a matching existing event is authoritative. The assessment becomes `meeting_scheduled`, any stale reply or invitation is removed, and the action pack is superseded. If Calendar cannot be read, email assessment continues and records the unavailable context for the model rather than failing the inbox scan.
 
 ## James Kape meeting case
 

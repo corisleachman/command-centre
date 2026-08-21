@@ -11,6 +11,26 @@ export type InterpretedConversation = {
   model: ModelInfo;
 };
 
+export type ExecutiveCalendarEvent = {
+  id: string;
+  status: string;
+  summary: string;
+  description: string;
+  htmlLink: string;
+  start: string;
+  end: string;
+  attendeeEmails: string[];
+  organiserEmail: string;
+  creatorEmail: string;
+};
+
+export type ExecutiveCalendarContext = {
+  status: "available" | "unavailable";
+  calendarId?: string;
+  events: ExecutiveCalendarEvent[];
+  reason?: string;
+};
+
 const ALLOWED_ACTIONS = new Set([
   "reply_draft",
   "document_draft",
@@ -54,6 +74,110 @@ function organisationFromEmail(value: string) {
   const domain = emailAddress(value).split("@")[1] || "";
   if (!domain || /gmail|outlook|hotmail|icloud|yahoo|protonmail/.test(domain)) return "";
   return domain.split(".")[0].replace(/[-_]+/g, " ").replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function normalisedWords(value: string) {
+  const ignored = new Set(["about", "and", "call", "catch", "chat", "discussion", "for", "from", "meeting", "new", "our", "re", "the", "this", "to", "with", "work"]);
+  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(word => word.length >= 3 && !ignored.has(word)));
+}
+
+function subjectOverlap(subject: string, event: ExecutiveCalendarEvent) {
+  const subjectWords = normalisedWords(subject);
+  if (!subjectWords.size) return false;
+  const calendarWords = normalisedWords(`${event.summary} ${event.description}`);
+  let matches = 0;
+  for (const word of subjectWords) if (calendarWords.has(word)) matches += 1;
+  return matches >= Math.min(2, subjectWords.size);
+}
+
+function activeCalendarEvents(context: ExecutiveCalendarContext) {
+  return context.status === "available"
+    ? context.events.filter(event => event.status !== "cancelled" && Number.isFinite(Date.parse(event.start)))
+    : [];
+}
+
+function eventHasContact(event: ExecutiveCalendarEvent, contactEmail: string) {
+  const participants = [...event.attendeeEmails, event.organiserEmail, event.creatorEmail].map(item => item.toLowerCase());
+  return participants.includes(contactEmail) || event.description.toLowerCase().includes(contactEmail);
+}
+
+function relevantCalendarEvents(messages: ExecutiveSourceMessage[], context: ExecutiveCalendarContext) {
+  const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
+  const latestIncoming = [...sorted].reverse().find(message => !message.mine);
+  if (!latestIncoming) return [];
+  const contactEmail = emailAddress(latestIncoming.from);
+  return activeCalendarEvents(context).filter(event => eventHasContact(event, contactEmail)).slice(0, 12);
+}
+
+function matchingCalendarEvent(
+  messages: ExecutiveSourceMessage[],
+  context: ExecutiveCalendarContext,
+  proposedStart?: string,
+) {
+  const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
+  const latestIncoming = [...sorted].reverse().find(message => !message.mine);
+  if (!latestIncoming) return null;
+  const contactEmail = emailAddress(latestIncoming.from);
+  const subject = latestIncoming.subject;
+  const proposalTime = proposedStart && Number.isFinite(Date.parse(proposedStart)) ? Date.parse(proposedStart) : null;
+  const earliestRelevantEnd = latestIncoming.internalDate - 24 * 60 * 60_000;
+  const candidates = activeCalendarEvents(context).filter(event => eventHasContact(event, contactEmail));
+  if (proposalTime !== null) {
+    const exact = candidates.find(event => Math.abs(Date.parse(event.start) - proposalTime) <= 90 * 60_000);
+    if (exact) return exact;
+  }
+  return candidates.find(event => Date.parse(event.end || event.start) >= earliestRelevantEnd && subjectOverlap(subject, event)) ?? null;
+}
+
+export function reconcileAssessmentWithCalendar(
+  assessment: ExecutiveAssessment,
+  messages: ExecutiveSourceMessage[],
+  context: ExecutiveCalendarContext,
+): ExecutiveAssessment {
+  if (context.status !== "available" || !context.events.length) return assessment;
+  const calendarActions = assessment.actions.filter(action => action.type === "calendar_proposal");
+  const exactMatch = calendarActions.map(action => matchingCalendarEvent(messages, context, stringValue(action.content.starts_at))).find(Boolean) ?? null;
+  const threadSuggestsMeeting = messages.some(message => /\b(?:calendar|call|chat|diary|interview|invite|meeting|schedule|time)\b/i.test(`${message.subject} ${message.body}`));
+  const conversationalMatch = threadSuggestsMeeting
+    ? matchingCalendarEvent(messages, context)
+    : null;
+  const event = exactMatch || conversationalMatch;
+  if (!event) return assessment;
+
+  const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
+  const latestIncoming = [...sorted].reverse().find(message => !message.mine);
+  const contactName = latestIncoming ? senderName(latestIncoming.from) : assessment.contactName;
+  const when = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(event.start));
+  const evidence = {
+    label: "Matching Google Calendar event",
+    quote: `${event.summary || `Meeting with ${contactName}`} is already in the diary for ${when}.`,
+    source: event.htmlLink || `calendar:${event.id}`,
+  };
+
+  return {
+    ...assessment,
+    summary: `${contactName}'s meeting is already in your diary for ${when}. The email and diary agree, so no further response or invitation is needed.`,
+    newState: "meeting_scheduled",
+    changes: [...assessment.changes.filter(change => change.type !== "meeting_agreed"), { type: "calendar_reconciled", evidence: evidence.quote }].slice(0, 10),
+    explicitRequests: [],
+    missingFacts: [],
+    evidence: [...assessment.evidence, evidence].slice(-10),
+    recommendedResponseBy: null,
+    consequenceOfDelay: null,
+    attentionScore: 0,
+    attentionLevel: "silent",
+    confidence: Math.max(assessment.confidence, .96),
+    title: `${contactName}'s meeting is already scheduled`,
+    whyNow: "No action is needed. Google Calendar confirms the agreed meeting has already been created.",
+    actions: [],
+  };
 }
 
 function safeContent(actionType: string, value: unknown, externalEmail: string) {
@@ -201,7 +325,7 @@ const assessmentSchema = {
   },
 };
 
-function intelligencePrompt(messages: ExecutiveSourceMessage[]) {
+function intelligencePrompt(messages: ExecutiveSourceMessage[], calendarContext: ExecutiveCalendarContext) {
   const transcript = [...messages].sort((left, right) => left.internalDate - right.internalDate).map(message => ({
     id: message.id,
     direction: message.mine ? "sent_by_coris" : "received_by_coris",
@@ -211,11 +335,26 @@ function intelligencePrompt(messages: ExecutiveSourceMessage[]) {
     sent_at: new Date(message.internalDate).toISOString(),
     body: message.body,
   }));
+  const calendar = calendarContext.status === "available"
+    ? relevantCalendarEvents(messages, calendarContext).map(event => ({
+        id: event.id,
+        status: event.status,
+        summary: event.summary,
+        description: event.description,
+        start: event.start,
+        end: event.end,
+        attendee_emails: event.attendeeEmails,
+        organiser_email: event.organiserEmail,
+        creator_email: event.creatorEmail,
+        source: event.htmlLink,
+      }))
+    : { unavailable: true, reason: calendarContext.reason || "Calendar context was not available." };
   return `You are the private executive assistant inside Coris Leachman's Command Centre. Read the entire email thread in chronological order before deciding what changed and who owns the next step.
 
 Rules:
 - Revenue, client and opportunity movement matters most. Bulk email and promotions are silent.
 - The latest message alone is not enough. Resolve proposals, acceptances, commitments, dates, times and ownership from the full thread.
+- Reconcile the email with the supplied Google Calendar events before proposing anything. Calendar evidence is authoritative. If a relevant meeting with the same person is already scheduled, do not propose another reply or invitation and use newState meeting_scheduled.
 - Do not create a generic reply, task, onboarding document or follow-up when a specific operational next step is already agreed.
 - It is valid to return attentionLevel silent and no actions when an email is informational, confirms completion, or does not require Coris to respond. Do not preserve an action just because a rules-based fallback suggested one.
 - If a meeting was accepted and Coris was asked to send the invite, use newState meeting_agreed_invite_pending. Prepare a short confirmation reply only if useful and a calendar_proposal only when the exact date and time are grounded in the thread.
@@ -225,19 +364,26 @@ Rules:
 - Use Europe/London for relative dates. Current time: ${new Date().toISOString()}.
 
 Thread:
-${JSON.stringify(transcript)}`;
+${JSON.stringify(transcript)}
+
+Relevant calendar window:
+${JSON.stringify(calendar)}`;
 }
 
-export async function assessConversationWithIntelligence(messages: ExecutiveSourceMessage[]): Promise<InterpretedConversation> {
+export async function assessConversationWithIntelligence(
+  messages: ExecutiveSourceMessage[],
+  calendarContext: ExecutiveCalendarContext = { status: "unavailable", events: [], reason: "Calendar context was not supplied." },
+): Promise<InterpretedConversation> {
   const fallback = assessConversation(messages);
-  if (fallback.category === "noise" || fallback.newState === "waiting_for_reply" || fallback.newState === "meeting_agreed_invite_pending") {
-    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
+  const reconciledFallback = reconcileAssessmentWithCalendar(fallback, messages, calendarContext);
+  if (fallback.category === "noise" || fallback.newState === "waiting_for_reply") {
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
   }
   const apiKey = Deno.env.get("AI_GATEWAY_API_KEY") || "";
   const modelName = Deno.env.get("EXECUTIVE_AGENT_MODEL") || "openai/gpt-5.4";
   if (!apiKey) {
     console.warn("[executive-agent] AI_GATEWAY_API_KEY is not configured; deterministic policy retained", { model: modelName });
-    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
   }
 
   const controller = new AbortController();
@@ -251,7 +397,7 @@ export async function assessConversationWithIntelligence(messages: ExecutiveSour
         model: modelName,
         messages: [
           { role: "system", content: "Return only the structured executive assessment. Accuracy and grounded next-action ownership are more important than producing many actions." },
-          { role: "user", content: intelligencePrompt(messages) },
+          { role: "user", content: intelligencePrompt(messages, calendarContext) },
         ],
         response_format: { type: "json_schema", json_schema: { name: "executive_assessment", strict: true, schema: assessmentSchema } },
       }),
@@ -260,14 +406,14 @@ export async function assessConversationWithIntelligence(messages: ExecutiveSour
     const payload = await response.json();
     const text = payload.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("AI Gateway returned no assessment.");
-    const assessment = normalizeModelAssessment(JSON.parse(text), messages, fallback);
-    return { assessment, model: { provider: "vercel-ai-gateway", name: stringValue(payload.model, modelName), version: "2" } };
+    const assessment = reconcileAssessmentWithCalendar(normalizeModelAssessment(JSON.parse(text), messages, fallback), messages, calendarContext);
+    return { assessment, model: { provider: "vercel-ai-gateway", name: stringValue(payload.model, modelName), version: "3" } };
   } catch (error) {
     console.error("[executive-agent] model assessment failed; deterministic policy retained", {
       model: modelName,
       detail: error instanceof Error ? error.message : "Unknown model failure",
     });
-    return { assessment: fallback, model: { provider: "rules", name: "revenue-ea-policy", version: "3" } };
+    return { assessment: reconciledFallback, model: { provider: "rules", name: "revenue-ea-policy", version: "4" } };
   } finally {
     clearTimeout(timeout);
   }

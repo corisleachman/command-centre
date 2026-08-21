@@ -1,6 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type ExecutiveSourceMessage } from "../_shared/executive-policy.ts";
-import { assessConversationWithIntelligence } from "../_shared/executive-intelligence.ts";
+import {
+  assessConversationWithIntelligence,
+  type ExecutiveCalendarContext,
+  type ExecutiveCalendarEvent,
+} from "../_shared/executive-intelligence.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -13,7 +17,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
 const TOKEN_KEY = Deno.env.get("CALENDAR_TOKEN_ENCRYPTION_KEY")!;
-const POLICY_VERSION = "revenue-ea-v4";
+const POLICY_VERSION = "revenue-ea-v5";
 const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -351,6 +355,65 @@ async function calendarFetch(calendarId: string, path: string, accessTokenValue:
   return response.json();
 }
 
+async function loadExecutiveCalendarContext(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  accessTokenValue: string,
+): Promise<ExecutiveCalendarContext> {
+  const { data: connection, error } = await admin
+    .from("google_calendar_connections")
+    .select("selected_calendar_id,granted_scopes")
+    .eq("user_id", userId)
+    .single();
+  if (error) return { status: "unavailable", events: [], reason: "The Google Calendar connection could not be read." };
+  const grantedScopes = Array.isArray(connection?.granted_scopes) ? connection.granted_scopes.map(String) : [];
+  if (!grantedScopes.includes(CALENDAR_EVENTS_SCOPE)) {
+    return { status: "unavailable", events: [], reason: "Google Calendar access has not been granted." };
+  }
+
+  const calendarId = stringValue(connection?.selected_calendar_id) || "primary";
+  const timeMin = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const timeMax = new Date(Date.now() + 180 * 86_400_000).toISOString();
+  const events: ExecutiveCalendarEvent[] = [];
+  let pageToken = "";
+  try {
+    for (let page = 0; page < 4; page += 1) {
+      const path = `/events?singleEvents=true&showDeleted=false&orderBy=startTime&maxResults=250&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+      const payload = await calendarFetch(calendarId, path, accessTokenValue);
+      for (const raw of payload.items ?? []) {
+        const start = stringValue(raw.start?.dateTime) || stringValue(raw.start?.date);
+        const end = stringValue(raw.end?.dateTime) || stringValue(raw.end?.date);
+        if (!start) continue;
+        events.push({
+          id: stringValue(raw.id),
+          status: stringValue(raw.status) || "confirmed",
+          summary: stringValue(raw.summary),
+          description: stringValue(raw.description),
+          htmlLink: stringValue(raw.htmlLink),
+          start,
+          end,
+          attendeeEmails: Array.isArray(raw.attendees) ? raw.attendees.map((attendee: any) => stringValue(attendee?.email).toLowerCase()).filter(Boolean) : [],
+          organiserEmail: stringValue(raw.organizer?.email).toLowerCase(),
+          creatorEmail: stringValue(raw.creator?.email).toLowerCase(),
+        });
+      }
+      pageToken = stringValue(payload.nextPageToken);
+      if (!pageToken) break;
+    }
+    return { status: "available", calendarId, events };
+  } catch (calendarError) {
+    console.warn("[executive-agent] calendar context unavailable; email assessment will continue", {
+      detail: calendarError instanceof Error ? calendarError.message : "Unknown Google Calendar error",
+    });
+    return {
+      status: "unavailable",
+      calendarId,
+      events: [],
+      reason: calendarError instanceof Error ? calendarError.message : "Google Calendar could not be checked.",
+    };
+  }
+}
+
 function calendarMoment(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: timezone,
@@ -534,9 +597,10 @@ async function persistAssessment(
   userId: string,
   messages: ExecutiveSourceMessage[],
   sourceUrl: string,
+  calendarContext: ExecutiveCalendarContext = { status: "unavailable", events: [], reason: "Calendar was not checked." },
 ) {
   if (!messages.length) throw new Error("No readable messages were found in this conversation.");
-  const interpreted = await assessConversationWithIntelligence(messages);
+  const interpreted = await assessConversationWithIntelligence(messages, calendarContext);
   const assessment = interpreted.assessment;
   const sortedMessages = [...messages].sort((left, right) => left.internalDate - right.internalDate);
   const latestMessage = sortedMessages[sortedMessages.length - 1];
@@ -675,13 +739,14 @@ async function retainLatestIncomingPreparation(
   userId: string,
   messages: ExecutiveSourceMessage[],
   sourceUrl: string,
+  calendarContext: ExecutiveCalendarContext,
 ) {
   const sorted = [...messages].sort((left, right) => left.internalDate - right.internalDate);
   if (!sorted.at(-1)?.mine) return null;
   const incomingIndex = sorted.findLastIndex(message => !message.mine);
   if (incomingIndex < 0) return null;
 
-  const historical = await persistAssessment(admin, userId, sorted.slice(0, incomingIndex + 1), sourceUrl);
+  const historical = await persistAssessment(admin, userId, sorted.slice(0, incomingIndex + 1), sourceUrl, calendarContext);
   if (!historical.packId) return null;
 
   const now = new Date().toISOString();
@@ -735,6 +800,7 @@ async function retainLatestIncomingPreparation(
 
 async function scanInbox(admin: ReturnType<typeof createClient>, userId: string, maxResultsInput = 10) {
   const token = await accessToken(admin, userId);
+  const calendarContext = await loadExecutiveCalendarContext(admin, userId, token);
   const maxResults = Math.min(Math.max(Number(maxResultsInput || 10), 1), 15);
   const query = "newer_than:3d {label:inbox label:sent} -category:promotions -category:social -category:forums";
   const list = await gmailFetch(`/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(query)}`, token);
@@ -744,8 +810,8 @@ async function scanInbox(admin: ReturnType<typeof createClient>, userId: string,
     try {
       const messages = await loadThread(threadId, token);
       const sourceUrl = `https://mail.google.com/mail/u/0/#all/${threadId}`;
-      const current = await persistAssessment(admin, userId, messages, sourceUrl);
-      const retainedPackId = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl);
+      const current = await persistAssessment(admin, userId, messages, sourceUrl, calendarContext);
+      const retainedPackId = await retainLatestIncomingPreparation(admin, userId, messages, sourceUrl, calendarContext);
       results.push({ ...current, retainedPackId });
     } catch (error) {
       results.push({ threadId, error: error instanceof Error ? error.message : "Unable to assess thread." });
@@ -857,7 +923,8 @@ Deno.serve(async request => {
       if (!threadId) return json({ error: "threadId is required." }, 400);
       const token = await accessToken(admin, user.id);
       const messages = await loadThread(threadId, token);
-      const result = await persistAssessment(admin, user.id, messages, `https://mail.google.com/mail/u/0/#all/${threadId}`);
+      const calendarContext = await loadExecutiveCalendarContext(admin, user.id, token);
+      const result = await persistAssessment(admin, user.id, messages, `https://mail.google.com/mail/u/0/#all/${threadId}`, calendarContext);
       return json(result);
     }
 
